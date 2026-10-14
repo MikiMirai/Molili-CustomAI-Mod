@@ -1,0 +1,26 @@
+# ==========================================
+# Molili Local Mod — .gitignore
+# ==========================================
+
+# Local Account Data & Backups
+account.json
+account.json.*
+
+# Local Game Data / Store Token
+store.json
+
+# Chat History Logs
+chat-history.jsonl
+chat-history.jsonl.*
+
+# Server Response Captures & Downloaded Assets
+capture/
+
+# User-specific Custom Persona (keep persona.example.txt tracked instead)
+persona.txt
+
+# Temporary / OS System Files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
