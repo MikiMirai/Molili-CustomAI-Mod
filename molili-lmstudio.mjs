@@ -18,6 +18,8 @@
  *   account.json          the saved local account (see account.mjs for the layout)
  *   capture/              recorded server responses, one file per endpoint (tokens are blanked)
  *
+ * Settings: molili.config.json next to this file (see config.mjs and README.md); environment variables override it.
+ *           DIARY_ORDER (oldest-first [default, as the server sends them] | newest-first).
  * Env vars: LMSTUDIO_URL, LMSTUDIO_MODEL, TEMPERATURE, MAX_TURNS, CDP_PORT, PERSONA_FILE, HISTORY_FILE,
  *           STREAM (0 = send each reply in one piece), DEBUG (1 = verbose),
  *           LOGIN_MODE (auto [default] | local | cloud; local = everything from files, the server is never contacted),
@@ -35,9 +37,19 @@ import { Account } from './account.mjs';
 import { Capture, Assets, crawl, normBody, replayableEndpoint, CRAWL_VERSION } from './capture.mjs';
 import { LocalDiary, localDate, daysAgo, dayRange, chatDigest, diaryMessages, cleanDiary } from './diary.mjs';
 import { writeStub, fallbackStub } from './localapi.mjs';
+import { loadConfig, CONFIG_FILE } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const env = (k, d) => process.env[k] ?? d;
+// settings: environment variable (if set) > molili.config.json > built-in default
+const CFG = loadConfig(HERE);
+const CONFIG_PROBLEMS = CFG.problems;
+const SOURCE = new Map();   // where each setting came from, for the console
+const env = (k, d) => {
+  const v = process.env[k];
+  if (v !== undefined && String(v).trim() !== '') { SOURCE.set(k, 'environment'); return v; }
+  if (CFG.values.has(k)) { SOURCE.set(k, CONFIG_FILE); return CFG.values.get(k); }
+  SOURCE.set(k, 'default'); return d;
+};
 const LM_URL = env('LMSTUDIO_URL', 'http://localhost:1234/v1/chat/completions');
 const LM_MODEL = env('LMSTUDIO_MODEL', '');
 const CDP_PORT = Number(env('CDP_PORT', 9222));
@@ -49,9 +61,12 @@ const PERSONA_FILE = env('PERSONA_FILE', path.join(HERE, 'persona.txt'));
 const HISTORY_FILE = env('HISTORY_FILE', path.join(HERE, 'chat-history.jsonl')); // '' = memory only
 const ACCOUNT_FILE = env('ACCOUNT_FILE', path.join(HERE, 'account.json'));        // '' = memory only
 const MODES = ['auto', 'local', 'cloud'];
-const MODE_ENV = String(process.env.LOGIN_MODE ?? '').trim().toLowerCase().replace(/^["']|["']$/g, '');   // tolerate "local " / "local" typos
+const MODE_RAW = String(env('LOGIN_MODE', '')).trim();
+const MODE_ENV = MODE_RAW.toLowerCase().replace(/^["']|["']$/g, '');   // tolerate "local " / "local" typos
 let LOGIN_MODE = MODES.includes(MODE_ENV) ? MODE_ENV : 'auto';
-let MODE_SOURCE = MODES.includes(MODE_ENV) ? 'LOGIN_MODE environment variable' : 'default';
+let MODE_SOURCE = MODES.includes(MODE_ENV) ? `LOGIN_MODE (${SOURCE.get('LOGIN_MODE')})` : 'default';
+const DIARY_ORDER_RAW = String(env('DIARY_ORDER', 'oldest-first')).trim().toLowerCase();
+const DIARY_ORDER = /^(newest|newest-first|desc|new)$/.test(DIARY_ORDER_RAW) ? 'newest-first' : 'oldest-first';   // the server's own order is oldest first
 const GATEWAY = env('GATEWAY', '1') !== '0';
 const RECORD = env('RECORD', '1') !== '0';
 const CAPTURE_DIR = env('CAPTURE_DIR', path.join(HERE, 'capture'));
@@ -373,13 +388,16 @@ function record(ep, method, reqBody, status, text, ctype) {
 
 const diary = new LocalDiary(DIARY_FILE, log);
 
-/** every diary record: the saved server entries + the ones written locally, newest first */
+/** every diary record: the saved server entries + the ones written locally, in the order set by DIARY_ORDER (default: oldest first, as the server sends them) */
+const byDate = (x, y) => String(x.createTime ?? '').localeCompare(String(y.createTime ?? ''));
 function allDiaryRecords() {
   const uniq = new Map();
   for (const e of capture.mem.get(DIARY)?.values() ?? []) for (const r of e.response?.data?.records ?? []) uniq.set(r.id ?? r.diaryId ?? JSON.stringify(r), r);
   for (const r of diary.records()) uniq.set(`local-${r.createTime}`, r);
-  return [...uniq.values()].sort((x, y) => String(y.createTime ?? '').localeCompare(String(x.createTime ?? '')));
+  return [...uniq.values()].sort(DIARY_ORDER === 'newest-first' ? (x, y) => byDate(y, x) : byDate);
 }
+/** the newest n entries, whatever DIARY_ORDER says (used for the diary writer's "recent" context) */
+const recentDiaryRecords = n => [...allDiaryRecords()].sort((x, y) => byDate(y, x)).slice(0, n);
 /** diary pages are served from ALL diary records, so any page size the app asks for works */
 function diaryReplay(body) {
   const all = allDiaryRecords();
@@ -432,7 +450,7 @@ async function generateDiary(date) {
   const { text: digest } = chatDigest(store.records, yesterday);
   const u = account.state.userInfo || {};
   const messages = diaryMessages({ persona: loadPersonaText(), characterName: characterName(), userName: u.username || u.nickname || '',
-    date, digest, yesterday, recent: allDiaryRecords().slice(0, 2).map(r => r.content) });
+    date, digest, yesterday, recent: recentDiaryRecords(2).map(r => r.content) });
   const think = new ThinkFilter(); let out = '';
   const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 10 * 60_000);
   try {
@@ -706,6 +724,10 @@ async function attach(cdp, info, sessionId) {
 }
 
 async function run() {
+  log(CFG.file ? `settings: ${CONFIG_FILE} loaded (environment variables still override it)` : `settings: no ${CONFIG_FILE} — built-in defaults (create one next to this script to change them)`);
+  for (const p of CONFIG_PROBLEMS) log(`WARNING: ${p}`);
+  if (!/^(oldest-first|oldest|asc|old|newest-first|newest|desc|new)$/.test(DIARY_ORDER_RAW)) log(`WARNING: DIARY_ORDER="${DIARY_ORDER_RAW}" is not oldest-first or newest-first — using oldest-first`);
+  log(`diary: entries shown ${DIARY_ORDER === 'newest-first' ? 'newest first' : 'oldest first (as the server sends them)'} (${SOURCE.get('DIARY_ORDER')})`);
   await startLocalServer();
   if (imported) log(`capture: converted ${imported} saved answer(s) so they can be replayed offline`);
   seedAccountFromCapture();
@@ -713,7 +735,7 @@ async function run() {
   log(`persona: ${fs.existsSync(PERSONA_FILE) ? PERSONA_FILE : '(built-in default — create persona.txt to customize)'}`);
   log(`account: ${ACCOUNT_FILE ? (account.exists ? ACCOUNT_FILE : '(no account.json yet — it is created from the server or at first local login)') : '(memory only)'}`
     + ` — profile ${account.hasProfile ? 'saved' : 'none'}, session ${account.state.session.loggedIn ? 'logged in' : 'logged out'}, mode ${LOGIN_MODE} (from ${MODE_SOURCE})`);
-  if (process.env.LOGIN_MODE && !MODES.includes(MODE_ENV)) log(`WARNING: LOGIN_MODE="${process.env.LOGIN_MODE}" is not one of auto, local, cloud — ignored`);
+  if (MODE_RAW && !MODES.includes(MODE_ENV)) log(`WARNING: LOGIN_MODE="${MODE_RAW}" is not one of auto, local, cloud — ignored`);
   if (LOGIN_MODE === 'local') log('account: LOCAL mode — account.json is never overwritten from the server');
   else if (account.state.autoSync !== false) log('account: account.json WILL be updated from the server while it is reachable (set LOGIN_MODE=local, or "autoSync": false in account.json, to stop that)');
   const SEED_FILE = env('SEED_FILE', path.join(HERE, 'store.json'));

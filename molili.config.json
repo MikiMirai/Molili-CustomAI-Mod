@@ -1,0 +1,22 @@
+{
+  "_note": "Settings for the Molili local mod. Keys are the same names as the environment variables; an environment variable, if set, overrides the value here. Remove a line to use its built-in default. LOGIN_MODE is left out on purpose: set it here (\"local\", \"auto\" or \"cloud\") or use \"loginMode\" in account.json.",
+  "DIARY_ORDER": "oldest-first",
+  "STREAM": true,
+  "DEBUG": false,
+  "LMSTUDIO_URL": "http://localhost:1234/v1/chat/completions",
+  "LMSTUDIO_MODEL": "",
+  "TEMPERATURE": 0.8,
+  "MAX_TURNS": 30,
+  "CDP_PORT": 9222,
+  "RECORD": true,
+  "CRAWL": "auto",
+  "CRAWL_PAGE_SIZE": 60,
+  "GATEWAY": true,
+  "CLOUD_BASE": "http://api.molili.net",
+  "CLOUD_TIMEOUT_MS": 8000,
+  "OFFLINE_STUB": false,
+  "LOCAL_BLOCK_NET": true,
+  "DIARY": "auto",
+  "DIARY_BACKFILL": 2,
+  "DIARY_DELAY_MS": 15000
+}
