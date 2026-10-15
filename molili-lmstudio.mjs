@@ -20,7 +20,9 @@
  *
  * Env vars: LMSTUDIO_URL, LMSTUDIO_MODEL, TEMPERATURE, MAX_TURNS, CDP_PORT, PERSONA_FILE, HISTORY_FILE,
  *           STREAM (0 = send each reply in one piece), DEBUG (1 = verbose),
- *           LOGIN_MODE (auto [default] | local | cloud), ACCOUNT_FILE, GATEWAY (0 = only chat/history are local),
+ *           LOGIN_MODE (auto [default] | local | cloud; local = everything from files, the server is never contacted),
+ *           DIARY (auto = daily diary in local mode | 1 | 0), DIARY_FILE, DIARY_BACKFILL, LOCAL_BLOCK_NET (0 = allow other hosts in local mode),
+ *           ACCOUNT_FILE, GATEWAY (0 = only chat/history are local),
  *           RECORD (0 = don't record server responses), CAPTURE_DIR, CLOUD_BASE, CLOUD_TIMEOUT_MS,
  *           OFFLINE_STUB (1 = answer unknown endpoints with an empty success when the server is down)
  */
@@ -30,7 +32,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Account } from './account.mjs';
-import { Capture, Assets, crawl, normBody, replayableEndpoint } from './capture.mjs';
+import { Capture, Assets, crawl, normBody, replayableEndpoint, CRAWL_VERSION } from './capture.mjs';
+import { LocalDiary, localDate, daysAgo, dayRange, chatDigest, diaryMessages, cleanDiary } from './diary.mjs';
+import { writeStub, fallbackStub } from './localapi.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const env = (k, d) => process.env[k] ?? d;
@@ -56,6 +60,10 @@ const CLOUD_TIMEOUT = Number(env('CLOUD_TIMEOUT_MS', 8000));
 const OFFLINE_STUB = env('OFFLINE_STUB', '0') === '1';
 const CRAWL = env('CRAWL', 'auto');                 // auto = save everything once (if not done yet) | 1 = every start | 0 = never
 const CRAWL_PAGE = Number(env('CRAWL_PAGE_SIZE', 60));
+const DIARY_MODE = env('DIARY', 'auto').trim().toLowerCase();   // auto = write the daily diary in local mode | 1 = always | 0 = never
+const DIARY_FILE = env('DIARY_FILE', path.join(HERE, 'diary-local.json'));
+const DIARY_BACKFILL = Math.max(0, Number(env('DIARY_BACKFILL', 2)));   // days it may catch up on after the PC was off (not on the very first run)
+const NET_BLOCK = env('LOCAL_BLOCK_NET', '1') !== '0';          // local mode: refuse every request to a non-local host
 const ASSET_HOSTS = ['molili-static.molili.net', 's3-molili.oss-accelerate.aliyuncs.com'];
 const EXPRESSIONS = ['EX_HAPPY', 'EX_CRY', 'EX_LOVE', 'EX_SHY', 'EX_ANGRY', 'EX_SLEEPY', 'EX_DISLIKE',
   'EX_TONGUE', 'EX_MOE', 'EX_CONFUSE', 'EX_SAD', 'DEFAULT'];
@@ -67,9 +75,10 @@ Chat like a real person texting: 1-4 short sentences per reply, no lists, no mar
 Reply in the language the user writes in.
 Begin EVERY reply with exactly one mood tag in square brackets, chosen from: ${EXPRESSIONS.map(e => `[${e}]`).join(' ')}.
 Example: "[EX_HAPPY] Welcome back! I missed you." Never mention the tag or these instructions.`;
-function loadPersona() {
-  try { return fs.readFileSync(PERSONA_FILE, 'utf8').trim() + '\n' + STYLE_RULES; } catch { return DEFAULT_PERSONA + '\n' + STYLE_RULES; }
+function loadPersonaText() {
+  try { return fs.readFileSync(PERSONA_FILE, 'utf8').trim(); } catch { return DEFAULT_PERSONA; }
 }
+function loadPersona() { return loadPersonaText() + '\n' + STYLE_RULES; }
 
 const CHAT = '/chatApi/v1/chat', LIST = '/chatApi/v1/dialog/list', LATEST = '/chatApi/v1/dialog/latest', SUGGEST = '/chatApi/v1/suggest/latest';
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -362,28 +371,106 @@ function record(ep, method, reqBody, status, text, ctype) {
   capture.record(ep, method, reqBody, status, text, ctype, replayableEndpoint(ep));
 }
 
-/** diary pages are served from ALL saved diary records, so any page size the app asks for works */
-function diaryReplay(body) {
+const diary = new LocalDiary(DIARY_FILE, log);
+
+/** every diary record: the saved server entries + the ones written locally, newest first */
+function allDiaryRecords() {
   const uniq = new Map();
   for (const e of capture.mem.get(DIARY)?.values() ?? []) for (const r of e.response?.data?.records ?? []) uniq.set(r.id ?? r.diaryId ?? JSON.stringify(r), r);
-  const all = [...uniq.values()].sort((x, y) => String(y.createTime ?? '').localeCompare(String(x.createTime ?? '')));
+  for (const r of diary.records()) uniq.set(`local-${r.createTime}`, r);
+  return [...uniq.values()].sort((x, y) => String(y.createTime ?? '').localeCompare(String(x.createTime ?? '')));
+}
+/** diary pages are served from ALL diary records, so any page size the app asks for works */
+function diaryReplay(body) {
+  const all = allDiaryRecords();
   if (!all.length) return null;
   const size = Math.max(1, Number(body.pageSize) || 10), idx = Math.max(0, Number(body.pageIndex) || 0);
   return { success: true, code: 0, errCode: null, errMessage: null, data: {
     records: all.slice(idx * size, (idx + 1) * size), total: all.length, size, current: idx, pages: Math.ceil(all.length / size) } };
 }
-/** an answer for this request from the saved captures, or null */
-function replay(pathname, body) {
-  const ep = Account.ep(pathname);
-  if (ep === DIARY) return diaryReplay(body);
+/** a page of a saved list, whatever page size the app asks for: all saved pages of the same query, merged and re-sliced */
+const PAGE_KEYS = new Set(['pageIndex', 'pageSize', 'offset']);
+const groupKey = b => normBody(Object.fromEntries(Object.entries(b || {}).filter(([k]) => !PAGE_KEYS.has(k))));
+function pagedReplay(ep, body) {
+  const want = groupKey(body);
+  const group = [...(capture.mem.get(ep)?.values() ?? [])].filter(e => Array.isArray(e.response?.data?.records) && groupKey(e.body) === want);
+  if (!group.length) return null;
+  const base = group.some(e => Number(e.body?.pageIndex) === 0) ? 0 : 1;
+  group.sort((a, b) => (Number(a.body?.pageIndex) || 0) - (Number(b.body?.pageIndex) || 0));
+  const uniq = new Map();
+  for (const e of group) for (const r of e.response.data.records) uniq.set(r.id ?? r.itemCode ?? r.mailId ?? JSON.stringify(r), r);
+  const all = [...uniq.values()];
+  const size = Math.max(1, Number(body.pageSize) || 20), idx = Math.max(base, Number(body.pageIndex) || base), start = (idx - base) * size;
+  return { success: true, code: 0, errCode: null, errMessage: null, data: {
+    records: all.slice(start, start + size), total: all.length, size, current: idx, pages: Math.ceil(all.length / size), empty: !all.length, notEmpty: !!all.length } };
+}
+/** the profile card counts diary entries; keep that number in step with the entries that exist locally */
+function patchSaved(ep, response) {
+  if (ep !== 'agentApi/v1/overview' || !response?.data) return response;
+  const out = structuredClone(response);
+  out.data.diaryCount = Math.max(Number(out.data.diaryCount) || 0, allDiaryRecords().length);
+  return out;
+}
+/**
+ * The answer for a request without the server: {status, json, how} or null.
+ * order: success stubs for pings -> diary -> exact saved copy -> merged saved pages -> empty list / "not available".
+ */
+function answerFromFiles(ep, body) {
+  const w = writeStub(ep); if (w) return { ...w, how: 'local stub' };
+  if (ep === DIARY) { const j = diaryReplay(body); if (j) return { status: 200, json: j, how: 'diary (saved + local)' }; }
   const hit = capture.lookup(ep, body);
-  return hit ? hit.response : null;
+  if (hit) return { status: 200, json: patchSaved(ep, hit.response), how: 'from saved capture' };
+  const paged = pagedReplay(ep, body); if (paged) return { status: 200, json: paged, how: 'from saved capture (merged pages)' };
+  const f = fallbackStub(ep); if (f) return { ...f, how: 'local stub' };
+  return null;
+}
+
+/* ---------------------------------------------------------------- the daily diary */
+const characterName = () => capture.newest('agentApi/v1/overview')?.response?.data?.name || '';
+async function generateDiary(date) {
+  const yesterday = daysAgo(1, dayRange(date)[0] + 12 * 3600e3);
+  const { text: digest } = chatDigest(store.records, yesterday);
+  const u = account.state.userInfo || {};
+  const messages = diaryMessages({ persona: loadPersonaText(), characterName: characterName(), userName: u.username || u.nickname || '',
+    date, digest, yesterday, recent: allDiaryRecords().slice(0, 2).map(r => r.content) });
+  const think = new ThinkFilter(); let out = '';
+  const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 10 * 60_000);
+  try {
+    for await (const tok of lmTokens(messages, ac.signal)) { const t = think.push(tok); if (t) out += t; }
+    const t = think.end(); if (t) out += t;
+  } finally { clearTimeout(timer); }
+  return cleanDiary(out);
+}
+const diaryOn = () => DIARY_MODE === '1' || (DIARY_MODE === 'auto' && LOGIN_MODE === 'local');
+let diaryBusy = false, diaryLastWarn = 0;
+/** writes today's entry (and, after the PC was off, up to DIARY_BACKFILL missed days) when it is not there yet */
+async function diaryTick() {
+  if (!diaryOn() || diaryBusy) return;
+  // today, plus the days AFTER the newest entry that were missed (the PC was off); never days before it, never more than DIARY_BACKFILL
+  const days = []; for (let i = diary.count ? DIARY_BACKFILL : 0; i >= 0; i--) days.push(daysAgo(i));
+  const missing = days.filter(d => !diary.has(d) && (!diary.latest || d > diary.latest));
+  if (!missing.length) return;
+  diaryBusy = true;
+  try {
+    for (const day of missing) {
+      log(`diary: writing the entry for ${day} ...`);
+      const text = await generateDiary(day);
+      diary.add(day, text);
+      log(`diary: wrote the entry for ${day} (${text.length} characters) — it is on the diary page now`);
+    }
+  } catch (e) {
+    if (Date.now() - diaryLastWarn > 30 * 60_000) { diaryLastWarn = Date.now(); log(`diary: could not write it yet (${e.message}) — will try again in a few minutes`); }
+  } finally { diaryBusy = false; }
 }
 
 let crawlState = 'idle';                 // idle -> running -> done
 async function maybeCrawl() {
-  if (crawlState !== 'idle' || CRAWL === '0' || !seenHeaders.token || Date.now() < cloudDownUntil) return;
-  if (CRAWL === 'auto' && fs.existsSync(path.join(CAPTURE_DIR, 'crawl-report.json'))) { crawlState = 'done'; return; }
+  if (LOGIN_MODE === 'local' || crawlState !== 'idle' || CRAWL === '0' || !seenHeaders.token || Date.now() < cloudDownUntil) return;   // local mode never contacts the server
+  if (CRAWL === 'auto') {   // once, unless the last run was by an older version that saved less
+    const rf = path.join(CAPTURE_DIR, 'crawl-report.json');
+    let v = 0; try { v = JSON.parse(fs.readFileSync(rf, 'utf8')).version || 1; } catch { v = fs.existsSync(rf) ? 1 : 0; }
+    if (v >= CRAWL_VERSION) { crawlState = 'done'; return; }
+  }
   crawlState = 'running';
   try {
     // LOGIN_MODE=local: the saved account is never overwritten from the server (the crawl still saves its answers to capture/)
@@ -460,7 +547,7 @@ async function gateway(req, res, raw) {
 
   if (mine && LOGIN_MODE === 'local') return local('local');
 
-  if (LOGIN_MODE !== 'local' || !mine) {
+  if (LOGIN_MODE !== 'local') {                          // local mode: the server is never contacted, everything comes from the files
     if (Date.now() >= cloudDownUntil) {
       try {
         const { r, buf } = await cloudFetch(req, urlPath, raw);
@@ -485,9 +572,9 @@ async function gateway(req, res, raw) {
     if (LOGIN_MODE === 'cloud') return sendJson(502, { success: false, errCode: 'CLOUD_UNREACHABLE', errMessage: 'Server unreachable', data: null });
   }
   if (mine) return local('local (server down)');
-  const saved = replay(pathname, body);
-  if (saved) { noteEndpoint(ep, 'from saved capture'); return sendJson(200, saved); }
-  noteEndpoint(ep, OFFLINE_STUB ? 'offline stub' : 'unavailable (server down, no local version yet)');
+  const answer = answerFromFiles(ep, body);
+  if (answer) { noteEndpoint(ep, answer.how); dbg(ep, JSON.stringify(body).slice(0, 200), '->', answer.status, answer.how); return sendJson(answer.status, answer.json); }
+  noteEndpoint(ep, OFFLINE_STUB ? 'offline stub' : (LOGIN_MODE === 'local' ? 'unavailable (local mode: nothing saved for this)' : 'unavailable (server down, no local version yet)'));
   if (OFFLINE_STUB) return sendJson(200, { success: true, code: 0, errCode: null, errMessage: null, data: null });
   return sendJson(503, { success: false, errCode: 'OFFLINE', errMessage: 'Server unavailable (local mode)', data: null });
 }
@@ -551,6 +638,9 @@ async function onPaused(cdp, ev) {
   const mine = [CHAT, LIST, LATEST, SUGGEST].some(x => pathname.endsWith(x));
   const origin = request.headers?.Origin || request.headers?.origin;
 
+  if (!/^https?:$/.test(u.protocol)) return ok('Fetch.continueRequest');
+  if (u.hostname !== 'api.molili.net') return onOtherHost(ok, request, u);      // pictures, and in local mode every other host
+
   if (request.method === 'OPTIONS') return ok('Fetch.fulfillRequest', { responseCode: 204, responseHeaders: corsList(origin) });
 
   // rewrite to our local server; the browser keeps the original body, we add the per-run secret
@@ -577,15 +667,41 @@ async function onPaused(cdp, ev) {
       responseHeaders: [{ name: 'Content-Type', value: 'application/json; charset=utf-8' }, ...corsList(origin)],
     });
   }
-  if (GATEWAY && localPort) return viaLocal('/gw' + u.pathname + u.search);
+  if ((GATEWAY || LOGIN_MODE === 'local') && localPort) return viaLocal('/gw' + u.pathname + u.search);
+  return ok('Fetch.continueRequest');
+}
+
+/** pictures from Molili's storage hosts, and (local mode) every other host */
+const loggedHosts = new Set();
+const isLocalHost = h => h === 'localhost' || h.endsWith('.localhost') || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+function onOtherHost(ok, request, u) {
+  const acao = { name: 'Access-Control-Allow-Origin', value: '*' };
+  if (assets.wanted(request.url)) {
+    if (request.method === 'OPTIONS') return ok('Fetch.fulfillRequest', { responseCode: 204, responseHeaders: [acao, { name: 'Access-Control-Allow-Headers', value: '*' }] });
+    const a = (LOGIN_MODE === 'local' || Date.now() < cloudDownUntil) ? assets.lookup(request.url) : null;
+    if (a) {
+      return ok('Fetch.fulfillRequest', { responseCode: 200, body: fs.readFileSync(a.file).toString('base64'),
+        responseHeaders: [{ name: 'Content-Type', value: a.type || 'application/octet-stream' }, acao, { name: 'Cache-Control', value: 'max-age=3600' }] });
+    }
+    if (LOGIN_MODE === 'local') {   // never fall through to the network
+      const k = Assets.key(request.url);
+      if (!loggedHosts.has(k)) { loggedHosts.add(k); log(`local mode: picture not saved — ${k}`); }
+      return ok('Fetch.fulfillRequest', { responseCode: 404, responseHeaders: [acao] });
+    }
+    return ok('Fetch.continueRequest');
+  }
+  if (LOGIN_MODE === 'local' && NET_BLOCK && !isLocalHost(u.hostname)) {
+    if (!loggedHosts.has(u.host)) { loggedHosts.add(u.host); log(`local mode: blocked a request to ${u.host} (nothing leaves your computer; LOCAL_BLOCK_NET=0 turns this off)`); }
+    return ok('Fetch.failRequest', { errorReason: 'BlockedByClient' });
+  }
   return ok('Fetch.continueRequest');
 }
 
 async function attach(cdp, info, sessionId) {
   if (info.type !== 'page') return;
-  await cdp.send('Fetch.enable', {
-    patterns: ['http://api.molili.net/*', 'https://api.molili.net/*'].map(urlPattern => ({ urlPattern, requestStage: 'Request' })),
-  }, sessionId);
+  const patterns = (LOGIN_MODE === 'local' && NET_BLOCK) ? ['*']          // local mode: see every request so none can reach the internet
+    : ['http://api.molili.net/*', 'https://api.molili.net/*', ...ASSET_HOSTS.flatMap(h => [`http://${h}/*`, `https://${h}/*`])];
+  await cdp.send('Fetch.enable', { patterns: patterns.map(urlPattern => ({ urlPattern, requestStage: 'Request' })) }, sessionId);
   log('hooked window:', info.url.slice(0, 70) || info.title || '(untitled)');
 }
 
@@ -607,9 +723,16 @@ async function run() {
       if (name !== null) log(`account: imported profile "${name}" and settings from ${path.basename(SEED_FILE)} (the login token is not copied)`);
     } catch (e) { log(`account: could not import ${path.basename(SEED_FILE)}: ${e.message}`); }
   }
-  log(`gateway: ${GATEWAY ? 'on' : 'off'}, recording ${RECORD ? 'to ' + CAPTURE_DIR : 'off'}`
-    + ` — ${capture.requestCount} saved requests, ${assets.count} saved files, crawl ${CRAWL}`);
-  log(CRAWL === '0' ? 'crawl: off' : 'crawl: will save the diary and store once the game is logged in and the server answers');
+  log(`gateway: ${GATEWAY || LOGIN_MODE === 'local' ? 'on' : 'off'}, recording ${RECORD && LOGIN_MODE !== 'local' ? 'to ' + CAPTURE_DIR : 'off'}`
+    + ` — ${capture.requestCount} saved requests, ${assets.count} saved files, crawl ${LOGIN_MODE === 'local' ? 'off' : CRAWL}`);
+  if (LOGIN_MODE === 'local') {
+    log(`local mode: every answer comes from your files (capture/, account.json, chat-history.jsonl${diaryOn() ? ', diary-local.json' : ''}); the server is never contacted`
+      + (NET_BLOCK ? ' and requests to other hosts are blocked' : ''));
+    if (!GATEWAY) log('local mode: GATEWAY=0 is ignored (the gateway is needed to keep the server out)');
+  }
+  log(LOGIN_MODE === 'local' || CRAWL === '0' ? 'crawl: off' : 'crawl: will save the diary, store and panels once the game is logged in and the server answers');
+  log(diaryOn() ? `diary: daily entry ON — ${diary.count} written locally (${DIARY_FILE}); today's is written once LM Studio answers`
+    : `diary: daily entry off (${DIARY_MODE === '0' ? 'DIARY=0' : 'it is written in local mode, or with DIARY=1'})`);
   let version;
   for (let i = 0; ; i++) {
     try { version = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json(); break; }
@@ -630,6 +753,8 @@ async function run() {
   const { targetInfos } = await cdp.send('Target.getTargets');
   for (const t of targetInfos.filter(t => t.type === 'page')) cdp.send('Target.attachToTarget', { targetId: t.targetId, flatten: true }).catch(() => {});
   log(`ready. Chat -> ${LM_URL}  (${STREAM ? 'streaming' : 'non-streaming'})`);
+  setTimeout(() => diaryTick().catch(e => log('diary error:', e.message)), Number(env('DIARY_DELAY_MS', 15000)));
+  setInterval(() => diaryTick().catch(e => log('diary error:', e.message)), 5 * 60_000);   // also catches the day changing while the game stays open
   await cdp.closed;
   log('Molili closed — exiting.');
   process.exit(0);

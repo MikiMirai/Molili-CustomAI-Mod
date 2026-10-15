@@ -5,7 +5,7 @@ cd /d "%~dp0"
 rem Opens WebView2's DevTools port on localhost only, so the script can sit in front of Molili's API calls.
 set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222
 rem --- optional settings ---
-rem set LMSTUDIO_MODEL=google/gemma-4-12b-qat
+rem set LMSTUDIO_MODEL=your-model-id
 rem set LOGIN_MODE=local   (no spaces, no quotes. local = always your saved account.json, never overwritten from the server;
 rem                         auto = real server when reachable, saved account when not; cloud = never use the saved account.)
 rem   Alternative that needs no variable: put  "loginMode": "local"  in account.json (Molili closed). The console prints which mode is active.

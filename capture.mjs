@@ -168,8 +168,9 @@ export class Assets {
  * game itself makes (same signature, your own login), then downloads the pictures they point to.
  * Gentle: one request at a time, with a short pause.
  */
+export const CRAWL_VERSION = 2;   // 2 = also saves the backpack, favor, skills, mail, favorites and task panels
 export async function crawl({ base, seen, capture, assets, mirror, log, diaryPageSize = 60, extraUrls = [], delayMs = 250 }) {
-  const t0 = Date.now(); const report = { startedAt: new Date(t0).toISOString(), diary: { pages: 0, entries: 0 }, store: { categories: 0, pages: 0, items: 0 }, errors: [] };
+  const t0 = Date.now(); const report = { version: CRAWL_VERSION, startedAt: new Date(t0).toISOString(), diary: { pages: 0, entries: 0 }, store: { categories: 0, pages: 0, items: 0 }, extras: {}, errors: [] };
   const hdr = { 'content-type': 'application/json', origin: 'http://tauri.localhost', appname: 'Molili' };
   for (const k of ['token', 'deviceid', 'accept-language']) if (seen[k]) hdr[k] = seen[k];
   let failStreak = 0; const diarySeen = new Set();   // the server repeats entries across pages: count each once
@@ -197,7 +198,7 @@ export async function crawl({ base, seen, capture, assets, mirror, log, diaryPag
     }
   };
   try {
-    log('crawl: started (diary, store, pictures) — keep the game open until it says finished');
+    log('crawl: started (diary, store, backpack, favor, skills, mail, favorites, pictures) — keep the game open until it says finished');
     const settings = await post('userSettingsApi/v1/getSettingsConfig', { timestamp: Date.now() });
     await post('userInfoApi/v1/getUserInfo', { timestamp: Date.now() });
     await post('userInfoApi/v1/getUserAsset', undefined, 'GET');   // balances: energy, stardust, ether film
@@ -228,6 +229,29 @@ export async function crawl({ base, seen, capture, assets, mirror, log, diaryPag
         log(`crawl: store category "${c.name ?? c.id}" done`);
       }
     }
+
+    // --- the other panels, with the server's real answers, so backpack / favor / skills / mail / favorites / tasks work offline too.
+    // Each one is optional: a failure here never stops the rest.
+    const extra = async (name, fn) => {
+      failStreak = 0;
+      try { report.extras[name] = await fn(); log(`crawl: ${name} saved`); }
+      catch (e) { report.errors.push(`${name}: ${e.message}`); log(`crawl: ${name} skipped (${e.message})`); }
+    };
+    const pages = async (ep, mk, size) => {
+      let n = 0;
+      for (let w = 1; w < 200; w++) { const j = await post(ep, mk(w)); const recs = j?.data?.records; if (!Array.isArray(recs)) break; n += recs.length; if (recs.length < size) break; }
+      return n;
+    };
+    await extra('skills', async () => { await post('skillApi/v1/all'); return 1; });
+    await extra('favor', async () => { await post('favorApi/v1/info', { agentId }); await post('favorApi/v1/levelInfo', { agentId }); return 1; });
+    await extra('tasks', async () => { await post('userCompanionTaskApi/v1/query', { agentId }); await post('userCompanionTaskApi/v1/list', { agentId }); return 1; });
+    await extra('mail', () => pages('userMailApi/v1/list', w => ({ pageIndex: w, pageSize: 20 }), 20));
+    await extra('favorites', () => pages('favoriteApi/v1/list', w => ({ pageSize: 20, pageIndex: w, agentId }), 20));
+    await extra('backpack', async () => {
+      const bc = (await post('backPackApi/v1/categoryList'))?.data; let n = 0;
+      if (Array.isArray(bc)) for (const c of bc) n += await pages('backPackApi/v1/items', w => ({ agentId, category: c.id, pageSize: 9, pageIndex: w, orderBy: '', orderDirection: '', groupBy: '', needTotalCount: true, offset: (w - 1) * 9 }), 9);
+      return n;
+    });
   } catch (e) { report.errors.push(String(e.message)); log('crawl: stopped —', e.message); }
 
   // --- pictures and files referenced by anything we saved (+ language files, + the background picture)
