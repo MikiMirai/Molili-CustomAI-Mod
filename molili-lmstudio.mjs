@@ -438,6 +438,31 @@ function allDiaryRecords() {
 }
 /** the newest n entries, whatever DIARY_ORDER says (used for the diary writer's "recent" context) */
 const recentDiaryRecords = n => [...allDiaryRecords()].sort((x, y) => byDate(y, x)).slice(0, n);
+/** Server online: its diary page, plus the diary entries written here for days after the server's newest.
+ *  The server lists oldest first, so those entries come after its last page. Page numbers start at 0 (the game's own). */
+function diaryMergeCloud(body, parsed) {
+  const data = parsed?.data;
+  if (!data || !Array.isArray(data.records) || typeof data.total !== 'number') return null;
+  const here = diary.records();
+  if (!here.length) return null;
+  const serverDays = new Set();
+  for (const r of data.records) serverDays.add(String(r.createTime ?? '').slice(0, 10));
+  for (const e of capture.mem.get(DIARY)?.values() ?? []) for (const r of e.response?.data?.records ?? []) serverDays.add(String(r.createTime ?? '').slice(0, 10));
+  const serverMax = [...serverDays].filter(Boolean).sort().at(-1) || '';
+  const extra = here.filter(r => { const d = String(r.createTime ?? '').slice(0, 10); return d > serverMax && !serverDays.has(d); }).sort(byDate);
+  if (!extra.length) return null;
+  const T = data.total, S = Math.max(1, Number(body.pageSize) || 10), p = Math.max(0, Number(body.pageIndex) || 0);
+  const from = Math.max(0, p * S - T), to = Math.max(0, (p + 1) * S - T);
+  const total = T + extra.length;
+  return { ...parsed, data: { ...data, records: [...data.records, ...extra.slice(from, to)], total, pages: Math.ceil(total / S), current: p } };
+}
+/** the server's answer with what was made here added (or null = send the server's answer as it is) */
+function mergeWithLocal(ep, body, parsed) {
+  if (ep === DIARY) return diaryMergeCloud(body, parsed);
+  if (ep === 'favoriteApi/v1/list') return favorites.mergeCloud(body, parsed);
+  return null;
+}
+
 /** diary pages are served from ALL diary records, so any page size the app asks for works */
 function diaryReplay(body) {
   const all = allDiaryRecords();
@@ -503,7 +528,7 @@ async function generateDiary(date) {
   } finally { clearTimeout(timer); }
   return cleanDiary(out);
 }
-const diaryOn = () => DIARY_MODE === '1' || (DIARY_MODE === 'auto' && LOGIN_MODE === 'local');
+const diaryOn = () => DIARY_MODE === '1' || (DIARY_MODE === 'auto' && (LOGIN_MODE === 'local' || Date.now() < cloudDownUntil));
 let diaryBusy = false, diaryLastWarn = 0;
 /** writes today's entry (and, after the PC was off, up to DIARY_BACKFILL missed days) when it is not there yet */
 async function diaryTick() {
@@ -547,7 +572,13 @@ async function maybeCrawl() {
 const account = new Account(ACCOUNT_FILE, log);
 const levels = new LevelLog(LEVELS_FILE, log);                          // how much affinity each level needs, as the server reports it
 const companion = new Companion(COMPANION_FILE, log);
-const favorites = new Favorites(FAVORITES_FILE, log, { wire: wireBase, find: id => store.records.find(r => r.msgId === id) });   // the Accompany timer (local mode, and while the server is down)
+/** the server's favorites saved in capture/ (every saved page, each favorite once) */
+const savedFavorites = () => {
+  const seen = new Map();
+  for (const e of capture.mem.get('favoriteApi/v1/list')?.values() ?? []) for (const r of e.response?.data?.records ?? []) if (r?.favoriteId) seen.set(r.favoriteId, r);
+  return [...seen.values()];
+};
+const favorites = new Favorites(FAVORITES_FILE, log, { wire: wireBase, find: id => store.records.find(r => r.msgId === id), saved: savedFavorites });   // the Accompany timer (local mode, and while the server is down)
 // "loginMode": "local" inside account.json works when LOGIN_MODE is not set in molili.config.json
 if (!MODES.includes(MODE_ENV) && MODES.includes(String(account.state.loginMode ?? '').trim().toLowerCase())) {
   LOGIN_MODE = String(account.state.loginMode).trim().toLowerCase(); MODE_SOURCE = 'account.json "loginMode"';
@@ -623,10 +654,12 @@ async function gateway(req, res, raw) {
           const ctype = r.headers.get('content-type') || '';
           const headers = {};
           for (const [k, v] of r.headers) if (!STRIP_RES.has(k) && !k.startsWith('access-control-')) headers[k] = v;
-          res.writeHead(r.status, { ...headers, 'Content-Length': buf.length, ...cors(origin) }); res.end(buf);
-          noteEndpoint(ep, `cloud ${r.status}`);
-          record(ep, req.method, body, r.status, text, ctype);
           let parsed = null; try { parsed = JSON.parse(text); } catch { /* ignore */ }
+          const merged = r.status === 200 && parsed ? mergeWithLocal(ep, body, parsed) : null;
+          const outBuf = merged ? Buffer.from(JSON.stringify(merged), 'utf8') : buf;
+          res.writeHead(r.status, { ...headers, 'Content-Length': outBuf.length, ...cors(origin) }); res.end(outBuf);
+          noteEndpoint(ep, `cloud ${r.status}${merged ? ' + saved here' : ''}`);
+          record(ep, req.method, body, r.status, text, ctype);
           if (r.status === 200 && (ep === 'agentApi/v1/overview' || ep === 'favorApi/v1/info')) levels.record(parsed?.data?.level, parsed?.data?.nextLevelFavor, ep === 'agentApi/v1/overview' ? 'overview' : 'affection');
           const note = mine ? account.mirror(pathname, body, r.status, parsed) : null;
           if (note) log(`account.json updated from the server (${note})`);
