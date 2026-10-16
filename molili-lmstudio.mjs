@@ -36,6 +36,7 @@ import { Account } from './account.mjs';
 import { Capture, Assets, crawl, normBody, replayableEndpoint, CRAWL_VERSION } from './capture.mjs';
 import { LocalDiary, localDate, daysAgo, dayRange, chatDigest, diaryMessages, cleanDiary } from './diary.mjs';
 import { writeStub, fallbackStub } from './localapi.mjs';
+import { Companion } from './companion.mjs';
 import { loadConfig, CONFIG_FILE } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -56,7 +57,8 @@ const STREAM = env('STREAM', '1') !== '0';
 const DEBUG = env('DEBUG', '0') === '1';
 const PERSONA_FILE = env('PERSONA_FILE', path.join(HERE, 'persona.txt'));
 const HISTORY_FILE = env('HISTORY_FILE', path.join(HERE, 'chat-history.jsonl')); // '' = memory only
-const ACCOUNT_FILE = env('ACCOUNT_FILE', path.join(HERE, 'account.json'));        // '' = memory only
+const ACCOUNT_FILE = env('ACCOUNT_FILE', path.join(HERE, 'account.json'));
+const COMPANION_FILE = env('COMPANION_FILE', path.join(HERE, 'companion.json'));        // '' = memory only
 const MODES = ['auto', 'local', 'cloud'];
 const MODE_RAW = String(env('LOGIN_MODE', '')).trim();
 const MODE_ENV = MODE_RAW.toLowerCase().replace(/^["']|["']$/g, '');   // tolerate "local " / "local" typos
@@ -421,6 +423,7 @@ function pagedReplay(ep, body) {
 }
 /** the profile card counts diary entries; keep that number in step with the entries that exist locally */
 function patchSaved(ep, response) {
+  if (ep === 'userInfoApi/v1/getUserAsset') return companion.patchAsset(response);   // balances plus what offline tasks earned
   if (ep !== 'agentApi/v1/overview' || !response?.data) return response;
   const out = structuredClone(response);
   out.data.diaryCount = Math.max(Number(out.data.diaryCount) || 0, allDiaryRecords().length);
@@ -431,6 +434,7 @@ function patchSaved(ep, response) {
  * order: success stubs for pings -> diary -> exact saved copy -> merged saved pages -> empty list / "not available".
  */
 function answerFromFiles(ep, body) {
+  const comp = companion.answer(ep, body); if (comp) return { status: comp.status, json: comp.json, how: comp.how };
   const w = writeStub(ep); if (w) return { ...w, how: 'local stub' };
   if (ep === DIARY) { const j = diaryReplay(body); if (j) return { status: 200, json: j, how: 'diary (saved + local)' }; }
   const hit = capture.lookup(ep, body);
@@ -498,6 +502,7 @@ async function maybeCrawl() {
 
 /* ================================================================ gateway */
 const account = new Account(ACCOUNT_FILE, log);
+const companion = new Companion(COMPANION_FILE, log);   // the Accompany timer (local mode, and while the server is down)
 // "loginMode": "local" inside account.json works when LOGIN_MODE is not set in molili.config.json
 if (!MODES.includes(MODE_ENV) && MODES.includes(String(account.state.loginMode ?? '').trim().toLowerCase())) {
   LOGIN_MODE = String(account.state.loginMode).trim().toLowerCase(); MODE_SOURCE = 'account.json "loginMode"';
