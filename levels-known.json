@@ -1,0 +1,353 @@
+{
+  "_about": "Affinity needed to reach the next level, as reported. 5, 7 and 8 come from the user's screenshots; 16-99 from a Steam guide and not yet checked in the game.",
+  "levels": {
+    "5": {
+      "nextLevelFavor": 49,
+      "source": "user screenshot"
+    },
+    "7": {
+      "nextLevelFavor": 65,
+      "source": "user screenshot"
+    },
+    "8": {
+      "nextLevelFavor": 74,
+      "source": "user screenshot"
+    },
+    "16": {
+      "nextLevelFavor": 135,
+      "source": "Steam guide (unverified)"
+    },
+    "17": {
+      "nextLevelFavor": 142,
+      "source": "Steam guide (unverified)"
+    },
+    "18": {
+      "nextLevelFavor": 149,
+      "source": "Steam guide (unverified)"
+    },
+    "19": {
+      "nextLevelFavor": 157,
+      "source": "Steam guide (unverified)"
+    },
+    "20": {
+      "nextLevelFavor": 165,
+      "source": "Steam guide (unverified)"
+    },
+    "21": {
+      "nextLevelFavor": 172,
+      "source": "Steam guide (unverified)"
+    },
+    "22": {
+      "nextLevelFavor": 180,
+      "source": "Steam guide (unverified)"
+    },
+    "23": {
+      "nextLevelFavor": 186,
+      "source": "Steam guide (unverified)"
+    },
+    "24": {
+      "nextLevelFavor": 195,
+      "source": "Steam guide (unverified)"
+    },
+    "25": {
+      "nextLevelFavor": 201,
+      "source": "Steam guide (unverified)"
+    },
+    "26": {
+      "nextLevelFavor": 209,
+      "source": "Steam guide (unverified)"
+    },
+    "27": {
+      "nextLevelFavor": 216,
+      "source": "Steam guide (unverified)"
+    },
+    "28": {
+      "nextLevelFavor": 223,
+      "source": "Steam guide (unverified)"
+    },
+    "29": {
+      "nextLevelFavor": 230,
+      "source": "Steam guide (unverified)"
+    },
+    "30": {
+      "nextLevelFavor": 238,
+      "source": "Steam guide (unverified)"
+    },
+    "31": {
+      "nextLevelFavor": 245,
+      "source": "Steam guide (unverified)"
+    },
+    "32": {
+      "nextLevelFavor": 252,
+      "source": "Steam guide (unverified)"
+    },
+    "33": {
+      "nextLevelFavor": 259,
+      "source": "Steam guide (unverified)"
+    },
+    "34": {
+      "nextLevelFavor": 266,
+      "source": "Steam guide (unverified)"
+    },
+    "35": {
+      "nextLevelFavor": 274,
+      "source": "Steam guide (unverified)"
+    },
+    "36": {
+      "nextLevelFavor": 280,
+      "source": "Steam guide (unverified)"
+    },
+    "37": {
+      "nextLevelFavor": 288,
+      "source": "Steam guide (unverified)"
+    },
+    "38": {
+      "nextLevelFavor": 295,
+      "source": "Steam guide (unverified)"
+    },
+    "39": {
+      "nextLevelFavor": 301,
+      "source": "Steam guide (unverified)"
+    },
+    "40": {
+      "nextLevelFavor": 309,
+      "source": "Steam guide (unverified)"
+    },
+    "41": {
+      "nextLevelFavor": 316,
+      "source": "Steam guide (unverified)"
+    },
+    "42": {
+      "nextLevelFavor": 323,
+      "source": "Steam guide (unverified)"
+    },
+    "43": {
+      "nextLevelFavor": 330,
+      "source": "Steam guide (unverified)"
+    },
+    "44": {
+      "nextLevelFavor": 336,
+      "source": "Steam guide (unverified)"
+    },
+    "45": {
+      "nextLevelFavor": 344,
+      "source": "Steam guide (unverified)"
+    },
+    "46": {
+      "nextLevelFavor": 351,
+      "source": "Steam guide (unverified)"
+    },
+    "47": {
+      "nextLevelFavor": 358,
+      "source": "Steam guide (unverified)"
+    },
+    "48": {
+      "nextLevelFavor": 364,
+      "source": "Steam guide (unverified)"
+    },
+    "49": {
+      "nextLevelFavor": 372,
+      "source": "Steam guide (unverified)"
+    },
+    "50": {
+      "nextLevelFavor": 379,
+      "source": "Steam guide (unverified)"
+    },
+    "51": {
+      "nextLevelFavor": 385,
+      "source": "Steam guide (unverified)"
+    },
+    "52": {
+      "nextLevelFavor": 392,
+      "source": "Steam guide (unverified)"
+    },
+    "53": {
+      "nextLevelFavor": 399,
+      "source": "Steam guide (unverified)"
+    },
+    "54": {
+      "nextLevelFavor": 406,
+      "source": "Steam guide (unverified)"
+    },
+    "55": {
+      "nextLevelFavor": 413,
+      "source": "Steam guide (unverified)"
+    },
+    "56": {
+      "nextLevelFavor": 420,
+      "source": "Steam guide (unverified)"
+    },
+    "57": {
+      "nextLevelFavor": 426,
+      "source": "Steam guide (unverified)"
+    },
+    "58": {
+      "nextLevelFavor": 434,
+      "source": "Steam guide (unverified)"
+    },
+    "59": {
+      "nextLevelFavor": 440,
+      "source": "Steam guide (unverified)"
+    },
+    "60": {
+      "nextLevelFavor": 447,
+      "source": "Steam guide (unverified)"
+    },
+    "61": {
+      "nextLevelFavor": 455,
+      "source": "Steam guide (unverified)"
+    },
+    "62": {
+      "nextLevelFavor": 460,
+      "source": "Steam guide (unverified)"
+    },
+    "63": {
+      "nextLevelFavor": 468,
+      "source": "Steam guide (unverified)"
+    },
+    "64": {
+      "nextLevelFavor": 475,
+      "source": "Steam guide (unverified)"
+    },
+    "65": {
+      "nextLevelFavor": 481,
+      "source": "Steam guide (unverified)"
+    },
+    "66": {
+      "nextLevelFavor": 488,
+      "source": "Steam guide (unverified)"
+    },
+    "67": {
+      "nextLevelFavor": 495,
+      "source": "Steam guide (unverified)"
+    },
+    "68": {
+      "nextLevelFavor": 501,
+      "source": "Steam guide (unverified)"
+    },
+    "69": {
+      "nextLevelFavor": 508,
+      "source": "Steam guide (unverified)"
+    },
+    "70": {
+      "nextLevelFavor": 516,
+      "source": "Steam guide (unverified)"
+    },
+    "71": {
+      "nextLevelFavor": 521,
+      "source": "Steam guide (unverified)"
+    },
+    "72": {
+      "nextLevelFavor": 529,
+      "source": "Steam guide (unverified)"
+    },
+    "73": {
+      "nextLevelFavor": 535,
+      "source": "Steam guide (unverified)"
+    },
+    "74": {
+      "nextLevelFavor": 542,
+      "source": "Steam guide (unverified)"
+    },
+    "75": {
+      "nextLevelFavor": 549,
+      "source": "Steam guide (unverified)"
+    },
+    "76": {
+      "nextLevelFavor": 555,
+      "source": "Steam guide (unverified)"
+    },
+    "77": {
+      "nextLevelFavor": 562,
+      "source": "Steam guide (unverified)"
+    },
+    "78": {
+      "nextLevelFavor": 569,
+      "source": "Steam guide (unverified)"
+    },
+    "79": {
+      "nextLevelFavor": 576,
+      "source": "Steam guide (unverified)"
+    },
+    "80": {
+      "nextLevelFavor": 611,
+      "source": "Steam guide (unverified)"
+    },
+    "81": {
+      "nextLevelFavor": 648,
+      "source": "Steam guide (unverified)"
+    },
+    "82": {
+      "nextLevelFavor": 684,
+      "source": "Steam guide (unverified)"
+    },
+    "83": {
+      "nextLevelFavor": 722,
+      "source": "Steam guide (unverified)"
+    },
+    "84": {
+      "nextLevelFavor": 761,
+      "source": "Steam guide (unverified)"
+    },
+    "85": {
+      "nextLevelFavor": 800,
+      "source": "Steam guide (unverified)"
+    },
+    "86": {
+      "nextLevelFavor": 841,
+      "source": "Steam guide (unverified)"
+    },
+    "87": {
+      "nextLevelFavor": 879,
+      "source": "Steam guide (unverified)"
+    },
+    "88": {
+      "nextLevelFavor": 922,
+      "source": "Steam guide (unverified)"
+    },
+    "89": {
+      "nextLevelFavor": 963,
+      "source": "Steam guide (unverified)"
+    },
+    "90": {
+      "nextLevelFavor": 1004,
+      "source": "Steam guide (unverified)"
+    },
+    "91": {
+      "nextLevelFavor": 1048,
+      "source": "Steam guide (unverified)"
+    },
+    "92": {
+      "nextLevelFavor": 1092,
+      "source": "Steam guide (unverified)"
+    },
+    "93": {
+      "nextLevelFavor": 1137,
+      "source": "Steam guide (unverified)"
+    },
+    "94": {
+      "nextLevelFavor": 1181,
+      "source": "Steam guide (unverified)"
+    },
+    "95": {
+      "nextLevelFavor": 1227,
+      "source": "Steam guide (unverified)"
+    },
+    "96": {
+      "nextLevelFavor": 1273,
+      "source": "Steam guide (unverified)"
+    },
+    "97": {
+      "nextLevelFavor": 1321,
+      "source": "Steam guide (unverified)"
+    },
+    "98": {
+      "nextLevelFavor": 1369,
+      "source": "Steam guide (unverified)"
+    },
+    "99": {
+      "nextLevelFavor": 1414,
+      "source": "Steam guide (unverified)"
+    }
+  }
+}
