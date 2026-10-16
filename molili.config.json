@@ -50,6 +50,8 @@
   "COMPANION_FILE": "companion.json",
   "_LEVELS_FILE": "Record of the affinity each level needs (levels.json), filled in as the server reports it.",
   "LEVELS_FILE": "levels.json",
+  "_FAVORITES_FILE": "The collected messages (favorites.json), kept for offline use.",
+  "FAVORITES_FILE": "favorites.json",
   "_CAPTURE_DIR": "Folder for the saved server answers.",
   "CAPTURE_DIR": "capture",
   "_DIARY_FILE": "Diary entries written locally.",

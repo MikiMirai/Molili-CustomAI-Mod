@@ -39,6 +39,7 @@ import { writeStub, fallbackStub } from './localapi.mjs';
 import { Companion } from './companion.mjs';
 import { LevelLog } from './levels.mjs';
 import { followUpEnabled, buildSuggestMessages, parseSuggestions } from './suggest.mjs';
+import { Favorites } from './favorites.mjs';
 import { loadConfig, CONFIG_FILE } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -62,6 +63,7 @@ const HISTORY_FILE = env('HISTORY_FILE', path.join(HERE, 'chat-history.jsonl'));
 const ACCOUNT_FILE = env('ACCOUNT_FILE', path.join(HERE, 'account.json'));
 const COMPANION_FILE = env('COMPANION_FILE', path.join(HERE, 'companion.json'));
 const LEVELS_FILE = env('LEVELS_FILE', path.join(HERE, 'levels.json'));        // '' = memory only
+const FAVORITES_FILE = env('FAVORITES_FILE', path.join(HERE, 'favorites.json')); // the collected messages (offline)
 const MODES = ['auto', 'local', 'cloud'];
 const MODE_RAW = String(env('LOGIN_MODE', '')).trim();
 const MODE_ENV = MODE_RAW.toLowerCase().replace(/^["']|["']$/g, '');   // tolerate "local " / "local" typos
@@ -88,7 +90,7 @@ const EXPRESSIONS = ['EX_HAPPY', 'EX_CRY', 'EX_LOVE', 'EX_SHY', 'EX_ANGRY', 'EX_
 const DEFAULT_PERSONA = `You are Molili, a cute, warm desktop-pet companion who lives on the user's screen.
 You are affectionate, playful and a little shy. You remember what the user tells you and bring it up naturally.`;
 const STYLE_RULES = `
-Chat like a real person texting: 1-4 short sentences per reply, no lists, no markdown, no stage directions.
+Chat like a real person texting. Vary the length: often 1 or 2 short sentences, sometimes more when the player asks something that needs it. No lists, no markdown, no stage directions.
 Reply in the language the user writes in.
 Begin EVERY reply with exactly one mood tag in square brackets, chosen from: ${EXPRESSIONS.map(e => `[${e}]`).join(' ')}.
 Example: "[EX_HAPPY] Welcome back! I missed you." Never mention the tag or these instructions.`;
@@ -322,7 +324,13 @@ async function chatTurn(body, emit, signal) {
       content: `(Can't reach LM Studio at ${LM_URL} — is the server running with a model loaded?)`,
     }));
   }
-  emit(sse('conversation.message.completed', []));
+  // The game shows the smart replies from the completed event: a follow_up item per suggestion (only when the switch is on).
+  let follow = [];
+  if (!signal?.aborted) follow = await suggestReplies(agentId).catch(() => []);
+  const stamp = Date.now();
+  emit(sse('conversation.message.completed', follow.map((content, i) => ({
+    type: 'follow_up', chatId, id: `local-fu${stamp}-${i}`, key: `fu-${stamp}-${i}`, content,
+  }))));
   emit(sse('conversation.chat.completed', {}));
 }
 
@@ -352,10 +360,15 @@ async function suggestReplies(agentId) {
 }
 
 /* =========================================================== JSON endpoints */
-const wire = r => ({
-  dialogId: r.dialogId, msgId: r.msgId, chatId: r.chatId, role: r.role, source: r.source, favorite: !!r.favorite,
+const wireBase = r => ({
+  dialogId: r.dialogId, msgId: r.msgId, chatId: r.chatId, role: r.role, source: r.source,
   parentMsgId: r.parentMsgId, dialogType: r.dialogType || 'text', content: r.content, supportTts: false,
 });
+// a message is a favorite when a saved favorite holds it (the game shows the star from this flag)
+const wire = r => {
+  const fav = favorites.favoriteOf(r.msgId);
+  return { ...wireBase(r), favorite: !!fav || !!r.favorite, ...(fav ? { favoriteId: fav.favoriteId } : {}) };
+};
 function jsonEndpoint(pathname, body) {
   const agentId = body.agentId || '';
   if (pathname.endsWith(LIST)) {
@@ -464,6 +477,7 @@ function patchSaved(ep, response) {
  */
 function answerFromFiles(ep, body) {
   const comp = companion.answer(ep, body); if (comp) return { status: comp.status, json: comp.json, how: comp.how };
+  const fav = favorites.answer(ep, body); if (fav) return { ...fav, how: 'local favorites' };
   const w = writeStub(ep); if (w) return { ...w, how: 'local stub' };
   if (ep === DIARY) { const j = diaryReplay(body); if (j) return { status: 200, json: j, how: 'diary (saved + local)' }; }
   const hit = capture.lookup(ep, body);
@@ -532,7 +546,8 @@ async function maybeCrawl() {
 /* ================================================================ gateway */
 const account = new Account(ACCOUNT_FILE, log);
 const levels = new LevelLog(LEVELS_FILE, log);                          // how much affinity each level needs, as the server reports it
-const companion = new Companion(COMPANION_FILE, log);   // the Accompany timer (local mode, and while the server is down)
+const companion = new Companion(COMPANION_FILE, log);
+const favorites = new Favorites(FAVORITES_FILE, log, { wire: wireBase, find: id => store.records.find(r => r.msgId === id) });   // the Accompany timer (local mode, and while the server is down)
 // "loginMode": "local" inside account.json works when LOGIN_MODE is not set in molili.config.json
 if (!MODES.includes(MODE_ENV) && MODES.includes(String(account.state.loginMode ?? '').trim().toLowerCase())) {
   LOGIN_MODE = String(account.state.loginMode).trim().toLowerCase(); MODE_SOURCE = 'account.json "loginMode"';
