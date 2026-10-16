@@ -1,9 +1,10 @@
 /**
  * config.mjs — reads molili.config.json (next to molili-lmstudio.mjs).
  *
- * Keys are the same names as the environment variables (LMSTUDIO_URL, TEMPERATURE, DIARY_ORDER, ...).
- * Precedence: environment variable (if set and not empty)  >  molili.config.json  >  built-in default.
+ * Every setting lives in this file (molili.config.json). Keys are the setting names (LMSTUDIO_URL, TEMPERATURE, DIARY_ORDER, ...).
+ * A setting that is not in the file uses its built-in default. Environment variables are not read.
  * Booleans can be written as true/false or 1/0. Paths can be relative to the folder of molili-lmstudio.mjs.
+ * Lines whose key starts with "_" are descriptions for you and are ignored.
  *
  * Problems (unknown key, wrong type, unreadable file) never stop the mod: they are returned as messages
  * and printed at startup, and the bad value is ignored.
@@ -16,7 +17,7 @@ export const CONFIG_FILE = 'molili.config.json';
 const NUMBER = new Set(['CDP_PORT', 'MAX_TURNS', 'TEMPERATURE', 'CRAWL_PAGE_SIZE', 'DIARY_BACKFILL', 'DIARY_DELAY_MS', 'CLOUD_TIMEOUT_MS']);
 const BOOLEAN = new Set(['STREAM', 'DEBUG', 'RECORD', 'GATEWAY', 'OFFLINE_STUB', 'LOCAL_BLOCK_NET']);
 const PATH = new Set(['PERSONA_FILE', 'HISTORY_FILE', 'ACCOUNT_FILE', 'CAPTURE_DIR', 'DIARY_FILE', 'SEED_FILE']);
-const STRING = new Set(['LOGIN_MODE', 'LMSTUDIO_URL', 'LMSTUDIO_MODEL', 'CRAWL', 'DIARY', 'DIARY_ORDER', 'CLOUD_BASE']);
+const STRING = new Set(['LOGIN_MODE', 'LMSTUDIO_URL', 'LMSTUDIO_MODEL', 'CRAWL', 'DIARY', 'DIARY_ORDER', 'CLOUD_BASE', 'ALLOW_ORIGINS']);
 export const KNOWN_KEYS = new Set([...NUMBER, ...BOOLEAN, ...PATH, ...STRING]);
 
 /**

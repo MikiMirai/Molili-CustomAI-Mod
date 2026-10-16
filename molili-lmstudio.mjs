@@ -18,8 +18,7 @@
  *   account.json          the saved local account (see account.mjs for the layout)
  *   capture/              recorded server responses, one file per endpoint (tokens are blanked)
  *
- * Settings: molili.config.json next to this file (see config.mjs and README.md); environment variables override it.
- *           DIARY_ORDER (oldest-first [default, as the server sends them] | newest-first).
+ * Settings: molili.config.json next to this file (every setting is described inside it; see README.md).
  * Env vars: LMSTUDIO_URL, LMSTUDIO_MODEL, TEMPERATURE, MAX_TURNS, CDP_PORT, PERSONA_FILE, HISTORY_FILE,
  *           STREAM (0 = send each reply in one piece), DEBUG (1 = verbose),
  *           LOGIN_MODE (auto [default] | local | cloud; local = everything from files, the server is never contacted),
@@ -40,13 +39,11 @@ import { writeStub, fallbackStub } from './localapi.mjs';
 import { loadConfig, CONFIG_FILE } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// settings: environment variable (if set) > molili.config.json > built-in default
+// settings come only from molili.config.json; a missing setting uses the built-in default
 const CFG = loadConfig(HERE);
 const CONFIG_PROBLEMS = CFG.problems;
 const SOURCE = new Map();   // where each setting came from, for the console
 const env = (k, d) => {
-  const v = process.env[k];
-  if (v !== undefined && String(v).trim() !== '') { SOURCE.set(k, 'environment'); return v; }
   if (CFG.values.has(k)) { SOURCE.set(k, CONFIG_FILE); return CFG.values.get(k); }
   SOURCE.set(k, 'default'); return d;
 };
@@ -65,8 +62,8 @@ const MODE_RAW = String(env('LOGIN_MODE', '')).trim();
 const MODE_ENV = MODE_RAW.toLowerCase().replace(/^["']|["']$/g, '');   // tolerate "local " / "local" typos
 let LOGIN_MODE = MODES.includes(MODE_ENV) ? MODE_ENV : 'auto';
 let MODE_SOURCE = MODES.includes(MODE_ENV) ? `LOGIN_MODE (${SOURCE.get('LOGIN_MODE')})` : 'default';
-const DIARY_ORDER_RAW = String(env('DIARY_ORDER', 'oldest-first')).trim().toLowerCase();
-const DIARY_ORDER = /^(newest|newest-first|desc|new)$/.test(DIARY_ORDER_RAW) ? 'newest-first' : 'oldest-first';   // the server's own order is oldest first
+const DIARY_ORDER_RAW = String(env('DIARY_ORDER', 'asc')).trim().toLowerCase();
+const DIARY_ORDER = DIARY_ORDER_RAW === 'desc' ? 'desc' : 'asc';   // asc = oldest first (the server's own order); desc = newest first
 const GATEWAY = env('GATEWAY', '1') !== '0';
 const RECORD = env('RECORD', '1') !== '0';
 const CAPTURE_DIR = env('CAPTURE_DIR', path.join(HERE, 'capture'));
@@ -388,13 +385,13 @@ function record(ep, method, reqBody, status, text, ctype) {
 
 const diary = new LocalDiary(DIARY_FILE, log);
 
-/** every diary record: the saved server entries + the ones written locally, in the order set by DIARY_ORDER (default: oldest first, as the server sends them) */
+/** every diary record: the saved server entries + the ones written locally, in the order set by DIARY_ORDER (asc = oldest first, the server's order; desc = newest first) */
 const byDate = (x, y) => String(x.createTime ?? '').localeCompare(String(y.createTime ?? ''));
 function allDiaryRecords() {
   const uniq = new Map();
   for (const e of capture.mem.get(DIARY)?.values() ?? []) for (const r of e.response?.data?.records ?? []) uniq.set(r.id ?? r.diaryId ?? JSON.stringify(r), r);
   for (const r of diary.records()) uniq.set(`local-${r.createTime}`, r);
-  return [...uniq.values()].sort(DIARY_ORDER === 'newest-first' ? (x, y) => byDate(y, x) : byDate);
+  return [...uniq.values()].sort(DIARY_ORDER === 'desc' ? (x, y) => byDate(y, x) : byDate);
 }
 /** the newest n entries, whatever DIARY_ORDER says (used for the diary writer's "recent" context) */
 const recentDiaryRecords = n => [...allDiaryRecords()].sort((x, y) => byDate(y, x)).slice(0, n);
@@ -501,7 +498,7 @@ async function maybeCrawl() {
 
 /* ================================================================ gateway */
 const account = new Account(ACCOUNT_FILE, log);
-// "loginMode": "local" inside account.json works without any environment variable (the variable wins when it is set)
+// "loginMode": "local" inside account.json works when LOGIN_MODE is not set in molili.config.json
 if (!MODES.includes(MODE_ENV) && MODES.includes(String(account.state.loginMode ?? '').trim().toLowerCase())) {
   LOGIN_MODE = String(account.state.loginMode).trim().toLowerCase(); MODE_SOURCE = 'account.json "loginMode"';
 }
@@ -724,10 +721,10 @@ async function attach(cdp, info, sessionId) {
 }
 
 async function run() {
-  log(CFG.file ? `settings: ${CONFIG_FILE} loaded (environment variables still override it)` : `settings: no ${CONFIG_FILE} — built-in defaults (create one next to this script to change them)`);
+  log(CFG.file ? `settings: ${CONFIG_FILE} loaded` : `settings: no ${CONFIG_FILE} — built-in defaults (create one next to this script to change them)`);
   for (const p of CONFIG_PROBLEMS) log(`WARNING: ${p}`);
-  if (!/^(oldest-first|oldest|asc|old|newest-first|newest|desc|new)$/.test(DIARY_ORDER_RAW)) log(`WARNING: DIARY_ORDER="${DIARY_ORDER_RAW}" is not oldest-first or newest-first — using oldest-first`);
-  log(`diary: entries shown ${DIARY_ORDER === 'newest-first' ? 'newest first' : 'oldest first (as the server sends them)'} (${SOURCE.get('DIARY_ORDER')})`);
+  if (DIARY_ORDER_RAW !== DIARY_ORDER) log(`WARNING: DIARY_ORDER="${DIARY_ORDER_RAW}" must be "asc" or "desc" — using "asc"`);
+  log(`diary: entries shown ${DIARY_ORDER === 'desc' ? 'newest first (desc)' : 'oldest first (asc, as the server sends them)'} (${SOURCE.get('DIARY_ORDER')})`);
   await startLocalServer();
   if (imported) log(`capture: converted ${imported} saved answer(s) so they can be replayed offline`);
   seedAccountFromCapture();
