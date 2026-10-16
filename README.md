@@ -25,8 +25,8 @@ An unofficial community mod for **Molili** (a Tauri app built with Rust and WebV
 * **LM Studio** running locally with a model loaded on port `1234`
 
 ### Installation
-1. Download or clone this repository and place `molili-lmstudio.mjs`, `account.mjs`, `capture.mjs`, and `start-molili-local.bat` in the same folder as `Molili.exe`.
-2. Copy `persona.example.txt` to `persona.txt` and customize your AI character's prompt.
+1. Download or clone this repository and place all the files in the same folder as `Molili.exe`.
+2. (Optional) Copy `persona.example.txt` to `persona.txt` and customize your AI character's prompt.
 3. Ensure Molili is completely closed, then run `start-molili-local.bat`.
 * The console will display `hooked window ...` followed by `ready` when successful.
 
@@ -66,6 +66,7 @@ You can customize behavior using environment variables in the batch script or yo
 * `OFFLINE_STUB`: When set to `1`, replies to unhandled server endpoints with an empty success structure instead of an error
 * `STREAM`: Enables or disables response streaming (`1` or `0`)
 * `DEBUG`: Enables verbose logging (`1` or `0`)
+* And more in the new config file!
 
 ---
 
