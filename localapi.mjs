@@ -21,7 +21,7 @@ const WRITE_OK = new Set([
   'userMailApi/v1/delete', 'userMailApi/v1/deleteRead',
 ]);
 const EMPTY_ARRAY = new Set([
-  'skillApi/v1/all', 'backPackApi/v1/categoryList', 'userCompanionTaskApi/v1/list', 'membershipApi/v1/list', 'userMembershipApi/v1/list',
+  'skillApi/v1/all', 'backPackApi/v1/categoryList', 'membershipApi/v1/list', 'userMembershipApi/v1/list',
 ]);
 const EMPTY_PAGE = new Set([
   'userMailApi/v1/list', 'favoriteApi/v1/list', 'backPackApi/v1/items', 'feedbackApi/v1/exception/list', 'diaryApi/v1/pageQuery',
@@ -38,7 +38,14 @@ const NEEDS = new Set([
 export function writeStub(ep) { return WRITE_OK.has(ep) ? ok() : null; }
 
 /** what to answer when nothing is saved for this request, or null (= unknown endpoint) */
+/** the three Accompany tasks and their rates, as the server listed them in the recording */
+export const COMPANION_TYPES = [
+  { taskType: 'REST', companionObtainMax: 120, companionObtainPoint: 0, energyPerHour: 60, favorPerHour: 0, stardustPerHour: 0 },
+  { taskType: 'WORK', companionObtainMax: 120, companionObtainPoint: 0, energyPerHour: 0, favorPerHour: 0, stardustPerHour: 60 },
+  { taskType: 'STUDY', companionObtainMax: 20, companionObtainPoint: 1, energyPerHour: 0, favorPerHour: 10, stardustPerHour: 0 },
+];
 export function fallbackStub(ep) {
+  if (ep === 'userCompanionTaskApi/v1/list') return ok(COMPANION_TYPES);
   if (ep === 'userMailApi/v1/unreadCount') return ok({ unreadCount: 0 });
   if (EMPTY_ARRAY.has(ep)) return list();
   if (EMPTY_PAGE.has(ep)) return ok(pager());
