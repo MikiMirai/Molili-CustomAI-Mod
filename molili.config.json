@@ -46,6 +46,8 @@
   "HISTORY_FILE": "chat-history.jsonl",
   "_ACCOUNT_FILE": "Your saved local account (account.json).",
   "ACCOUNT_FILE": "account.json",
+  "_COMPANION_FILE": "Saved state of the Accompany timer (companion.json), so a running task keeps its time.",
+  "COMPANION_FILE": "companion.json",
   "_CAPTURE_DIR": "Folder for the saved server answers.",
   "CAPTURE_DIR": "capture",
   "_DIARY_FILE": "Diary entries written locally.",
