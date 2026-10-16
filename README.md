@@ -73,6 +73,8 @@ You can customize behavior using environment variables in the batch script or yo
 ## 🎯 TODO
 * [x] **Complete Offline Experience:** Implement full standalone gameplay capabilities without requiring a live server handshake.
 * [ ] **Auto Local Files:** Generate all needed files even without initial server handshake.
+* [ ] **Levels:** Allow the local user to level up by gaining affinity.
+* [ ] **Chat Suggestions:** Use the local LLM to get reply suggestions and respect the setting for that.
 * [ ] **LM Studio Enhancement** Make sure to load a model if the LM Studio API is available instead of giving an error.
 * [ ] **Expanded Endpoint Support:** Add robust local handling for additional game features (such as mail, backpack management, favorites, and skills) currently returning empty success stubs or fallback errors.
 * [ ] **Server Push & Voice Integration:** Explore handling for server push WebSocket messages (e.g., voice notifications, random prompts, and event alerts) and text-to-speech (TTS) workflows.
