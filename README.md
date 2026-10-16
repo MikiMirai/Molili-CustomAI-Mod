@@ -70,7 +70,7 @@ You can customize behavior using environment variables in the batch script or yo
 ---
 
 ## 🎯 TODO & Roadmap
-* [ ] **Complete Offline Experience:** Implement full standalone gameplay capabilities without requiring an initial online connection or live server handshake.
+* [x] **Complete Offline Experience:** Implement full standalone gameplay capabilities without requiring an initial online connection or live server handshake.
 * [ ] **LM Studio Enhancement** Make sure to load a model if the LM Studio API is available instead of giving an error.
 * [ ] **Expanded Endpoint Support:** Add robust local handling for additional game features (such as mail, backpack management, favorites, and skills) currently returning empty success stubs or fallback errors.
 * [ ] **Server Push & Voice Integration:** Explore handling for server push WebSocket messages (e.g., voice notifications, random prompts, and event alerts) and text-to-speech (TTS) workflows.
