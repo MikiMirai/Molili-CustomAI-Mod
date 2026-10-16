@@ -37,6 +37,8 @@ import { Capture, Assets, crawl, normBody, replayableEndpoint, CRAWL_VERSION } f
 import { LocalDiary, localDate, daysAgo, dayRange, chatDigest, diaryMessages, cleanDiary } from './diary.mjs';
 import { writeStub, fallbackStub } from './localapi.mjs';
 import { Companion } from './companion.mjs';
+import { LevelLog } from './levels.mjs';
+import { followUpEnabled, buildSuggestMessages, parseSuggestions } from './suggest.mjs';
 import { loadConfig, CONFIG_FILE } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -58,7 +60,8 @@ const DEBUG = env('DEBUG', '0') === '1';
 const PERSONA_FILE = env('PERSONA_FILE', path.join(HERE, 'persona.txt'));
 const HISTORY_FILE = env('HISTORY_FILE', path.join(HERE, 'chat-history.jsonl')); // '' = memory only
 const ACCOUNT_FILE = env('ACCOUNT_FILE', path.join(HERE, 'account.json'));
-const COMPANION_FILE = env('COMPANION_FILE', path.join(HERE, 'companion.json'));        // '' = memory only
+const COMPANION_FILE = env('COMPANION_FILE', path.join(HERE, 'companion.json'));
+const LEVELS_FILE = env('LEVELS_FILE', path.join(HERE, 'levels.json'));        // '' = memory only
 const MODES = ['auto', 'local', 'cloud'];
 const MODE_RAW = String(env('LOGIN_MODE', '')).trim();
 const MODE_ENV = MODE_RAW.toLowerCase().replace(/^["']|["']$/g, '');   // tolerate "local " / "local" typos
@@ -323,6 +326,31 @@ async function chatTurn(body, emit, signal) {
   emit(sse('conversation.chat.completed', {}));
 }
 
+/* ============================================================ smart replies */
+// The game asks for follow-up lines after a reply. They come from LM Studio, and only when the game's
+// smart-reply switch (enableFollowUp) is on. The last answer is kept, since the game asks again for the same reply.
+const suggestCache = new Map();   // agentId -> { key, list }
+async function suggestReplies(agentId) {
+  if (!followUpEnabled(account.state.settings?.configs)) return [];
+  const context = store.context(agentId);
+  const last = context[context.length - 1];
+  if (!last || last.role !== 'assistant') return [];      // suggestions follow a reply
+  const key = `${context.length}|${last.content}`;
+  const hit = suggestCache.get(agentId);
+  if (hit && hit.key === key) return hit.list;
+  const messages = buildSuggestMessages(context, { name: characterName() });
+  const think = new ThinkFilter(); let raw = '';
+  const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 20_000);
+  try {
+    for await (const tok of lmTokens(messages, ac.signal)) { const t = think.push(tok); if (t) raw += t; }
+    const t = think.end(); if (t) raw += t;
+  } finally { clearTimeout(timer); }
+  const list = parseSuggestions(raw);
+  suggestCache.set(agentId, { key, list });
+  log(`smart replies: ${list.length ? list.map(x => `"${x}"`).join(', ') : 'none'}`);
+  return list;
+}
+
 /* =========================================================== JSON endpoints */
 const wire = r => ({
   dialogId: r.dialogId, msgId: r.msgId, chatId: r.chatId, role: r.role, source: r.source, favorite: !!r.favorite,
@@ -424,8 +452,9 @@ function pagedReplay(ep, body) {
 /** the profile card counts diary entries; keep that number in step with the entries that exist locally */
 function patchSaved(ep, response) {
   if (ep === 'userInfoApi/v1/getUserAsset') return companion.patchAsset(response);   // balances plus what offline tasks earned
+  if (ep === 'favorApi/v1/info') return companion.patchFavor(response, true);   // the Affection numbers
   if (ep !== 'agentApi/v1/overview' || !response?.data) return response;
-  const out = structuredClone(response);
+  const out = companion.patchFavor(response, false);   // level and affinity progress (the top of the Main Panel and Overview)
   out.data.diaryCount = Math.max(Number(out.data.diaryCount) || 0, allDiaryRecords().length);
   return out;
 }
@@ -502,6 +531,7 @@ async function maybeCrawl() {
 
 /* ================================================================ gateway */
 const account = new Account(ACCOUNT_FILE, log);
+const levels = new LevelLog(LEVELS_FILE, log);                          // how much affinity each level needs, as the server reports it
 const companion = new Companion(COMPANION_FILE, log);   // the Accompany timer (local mode, and while the server is down)
 // "loginMode": "local" inside account.json works when LOGIN_MODE is not set in molili.config.json
 if (!MODES.includes(MODE_ENV) && MODES.includes(String(account.state.loginMode ?? '').trim().toLowerCase())) {
@@ -582,6 +612,7 @@ async function gateway(req, res, raw) {
           noteEndpoint(ep, `cloud ${r.status}`);
           record(ep, req.method, body, r.status, text, ctype);
           let parsed = null; try { parsed = JSON.parse(text); } catch { /* ignore */ }
+          if (r.status === 200 && (ep === 'agentApi/v1/overview' || ep === 'favorApi/v1/info')) levels.record(parsed?.data?.level, parsed?.data?.nextLevelFavor, ep === 'agentApi/v1/overview' ? 'overview' : 'affection');
           const note = mine ? account.mirror(pathname, body, r.status, parsed) : null;
           if (note) log(`account.json updated from the server (${note})`);
           if (r.status === 200) maybeCrawl().catch(e => log('crawl error:', e.message));
@@ -680,7 +711,11 @@ async function onPaused(cdp, ev) {
         responseHeaders: [{ name: 'Content-Type', value: 'text/event-stream; charset=utf-8' }, ...corsList(origin)],
       });
     }
-    const out = envelope(jsonEndpoint(pathname, body));
+    let out;
+    if (pathname.endsWith(SUGGEST)) {
+      const list = await suggestReplies(body.agentId || '').catch(e => { log('smart replies: LM Studio error —', e.message); return []; });
+      out = envelope({ data: list });
+    } else out = envelope(jsonEndpoint(pathname, body));
     dbg(pathname.split('/').slice(-2).join('/'), JSON.stringify(body), '->', out.slice(0, 300));
     return ok('Fetch.fulfillRequest', {
       responseCode: 200, body: Buffer.from(out, 'utf8').toString('base64'),
@@ -717,11 +752,26 @@ function onOtherHost(ok, request, u) {
   return ok('Fetch.continueRequest');
 }
 
+/** runs in the game page: passes the level numbers of each socket push to the mod (the game still gets them) */
+const LEVEL_HOOK = `(() => { if (window.__moliliLevelHook) return; window.__moliliLevelHook = true;
+  const log = console.log;
+  console.log = function (...a) {
+    try { if (a[0] === 'socket_number_msg' && a[1] && typeof a[1] === 'object' && typeof window.moliliLevelSeen === 'function')
+      window.moliliLevelSeen(JSON.stringify({ level: a[1].level, nextLevelFavor: a[1].nextLevelFavor })); } catch (e) { /* never break the game */ }
+    return log.apply(this, a);
+  };
+})();`;
+
 async function attach(cdp, info, sessionId) {
   if (info.type !== 'page') return;
   const patterns = (LOGIN_MODE === 'local' && NET_BLOCK) ? ['*']          // local mode: see every request so none can reach the internet
     : ['http://api.molili.net/*', 'https://api.molili.net/*', ...ASSET_HOSTS.flatMap(h => [`http://${h}/*`, `https://${h}/*`])];
   await cdp.send('Fetch.enable', { patterns: patterns.map(urlPattern => ({ urlPattern, requestStage: 'Request' })) }, sessionId);
+  try {
+    await cdp.send('Runtime.addBinding', { name: 'moliliLevelSeen' }, sessionId);
+    await cdp.send('Runtime.evaluate', { expression: LEVEL_HOOK }, sessionId);
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: LEVEL_HOOK }, sessionId);
+  } catch (e) { log('level hook not installed:', e.message); }
   log('hooked window:', info.url.slice(0, 70) || info.title || '(untitled)');
 }
 
@@ -734,6 +784,7 @@ async function run() {
   if (imported) log(`capture: converted ${imported} saved answer(s) so they can be replayed offline`);
   seedAccountFromCapture();
   log(`history: ${HISTORY_FILE || '(memory only)'} — ${store.records.length} saved messages`);
+  log(`levels: ${levels.count} level threshold(s) recorded in ${path.basename(LEVELS_FILE)}`);
   log(`persona: ${fs.existsSync(PERSONA_FILE) ? PERSONA_FILE : '(built-in default — create persona.txt to customize)'}`);
   log(`account: ${ACCOUNT_FILE ? (account.exists ? ACCOUNT_FILE : '(no account.json yet — it is created from the server or at first local login)') : '(memory only)'}`
     + ` — profile ${account.hasProfile ? 'saved' : 'none'}, session ${account.state.session.loggedIn ? 'logged in' : 'logged out'}, mode ${LOGIN_MODE} (from ${MODE_SOURCE})`);
@@ -769,6 +820,8 @@ async function run() {
       const { sessionId, targetInfo } = msg.params;
       attach(cdp, targetInfo, sessionId).catch(e => log('attach error:', e.message));
       cdp.send('Runtime.runIfWaitingForDebugger', {}, sessionId).catch(() => {});
+    } else if (msg.method === 'Runtime.bindingCalled' && msg.params?.name === 'moliliLevelSeen') {
+      try { const p = JSON.parse(msg.params.payload); levels.record(p.level, p.nextLevelFavor, 'socket'); } catch { /* not a level push */ }
     } else if (msg.method === 'Fetch.requestPaused') {
       onPaused(cdp, msg).catch(e => log('handler error:', e.message));
     }
