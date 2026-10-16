@@ -33,7 +33,7 @@ export class Companion {
     const j = this.#load() ?? {};
     this.s = j.s ?? null;                                           // the current task
     this.d = { day: null, WORK: 0, STUDY: 0, ...(j.d ?? {}) };      // what was earned today
-    this.wallet = { stardust: 0, ...(j.wallet ?? {}) };             // stardust earned locally, on top of the saved balance
+    this.wallet = { stardust: 0, affinity: 0, ...(j.wallet ?? {}) }; // what offline tasks earned in total, on top of the saved numbers
   }
 
   #load() {
@@ -61,6 +61,7 @@ export class Companion {
     if (give > 0) {
       this.d[t.companionStatus] += give;
       if (t.companionStatus === 'WORK') this.wallet.stardust += give;
+      else this.wallet.affinity += give;
       this.log(`companion: +${give} ${t.companionStatus === 'WORK' ? 'stardust' : 'affinity'} (today ${this.d[t.companionStatus]}/${rate.max})`);
     }
     t.credited = target;
@@ -70,6 +71,20 @@ export class Companion {
       this.s = { agentId: t.agentId, timerType: t.timerType || 1, companionStatus: null, planned: 0, endsAt: null, taskStatus: 'END' };
       this.#save();
     }
+  }
+
+  /** the saved overview / affection answers with the affinity the Study tasks earned added.
+   *  Offline we only know the threshold of the current level, so progress stops one point short of the next level. */
+  patchFavor(resp, affection) {
+    if (!resp?.data || typeof resp.data.levelFavor !== 'number') return resp;
+    this.#settle();
+    const out = structuredClone(resp), d = out.data;
+    const next = Number(d.nextLevelFavor);
+    let v = d.levelFavor + this.wallet.affinity;
+    if (Number.isFinite(next)) v = Math.min(v, next - 1);
+    d.levelFavor = Math.max(d.levelFavor, v);
+    if (affection) for (const o of d.obtainSourceList ?? []) if (o.code === 'companion_task_study' && o.variables) o.variables.companion_obtain_point = this.d.STUDY;
+    return out;
   }
 
   /** the saved getUserAsset answer with what the offline tasks earned added */
