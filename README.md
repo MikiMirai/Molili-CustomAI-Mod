@@ -41,7 +41,7 @@ An unofficial community mod for **Molili** (a Tauri app built with Rust and WebV
 
 ### 1. Automated Data Crawling (`CRAWL=auto`)
 The first time the game logs in with an active server connection, the mod runs a gentle background crawl to save your data locally:
-* **Diary:** Pages through your complete history (duplicates across pages are automatically filtered).
+* **Diary:** Pages through your complete history (duplicates across pages are automatically filtered, order setting in the config file).
 * **Store:** Captures every category, item page, and your owned items.
 * **Balances & Assets:** Saves your energy, stardust, and references to associated static images/media files into `capture/`.
 
@@ -70,8 +70,9 @@ You can customize behavior using environment variables in the batch script or yo
 
 ---
 
-## 🎯 TODO & Roadmap
-* [x] **Complete Offline Experience:** Implement full standalone gameplay capabilities without requiring an initial online connection or live server handshake.
+## 🎯 TODO
+* [x] **Complete Offline Experience:** Implement full standalone gameplay capabilities without requiring a live server handshake.
+* [ ] **Auto Local Files:** Generate all needed files even without initial server handshake.
 * [ ] **LM Studio Enhancement** Make sure to load a model if the LM Studio API is available instead of giving an error.
 * [ ] **Expanded Endpoint Support:** Add robust local handling for additional game features (such as mail, backpack management, favorites, and skills) currently returning empty success stubs or fallback errors.
 * [ ] **Server Push & Voice Integration:** Explore handling for server push WebSocket messages (e.g., voice notifications, random prompts, and event alerts) and text-to-speech (TTS) workflows.
