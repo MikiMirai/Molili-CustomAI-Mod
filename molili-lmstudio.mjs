@@ -37,7 +37,7 @@ import { Capture, Assets, crawl, normBody, replayableEndpoint, CRAWL_VERSION } f
 import { LocalDiary, localDate, daysAgo, dayRange, chatDigest, diaryMessages, cleanDiary } from './diary.mjs';
 import { writeStub, fallbackStub } from './localapi.mjs';
 import { Companion } from './companion.mjs';
-import { LevelLog } from './levels.mjs';
+import { LevelLog, levelNeeder } from './levels.mjs';
 import { followUpEnabled, buildSuggestMessages, parseSuggestions } from './suggest.mjs';
 import { Favorites } from './favorites.mjs';
 import { loadConfig, CONFIG_FILE } from './config.mjs';
@@ -460,6 +460,7 @@ function diaryMergeCloud(body, parsed) {
 function mergeWithLocal(ep, body, parsed) {
   if (ep === DIARY) return diaryMergeCloud(body, parsed);
   if (ep === 'favoriteApi/v1/list') return favorites.mergeCloud(body, parsed);
+  if (ep === 'userInfoApi/v1/getUserAsset') return companion.combineAsset(parsed);   // currencies: server balance + stardust earned offline
   return null;
 }
 
@@ -502,6 +503,9 @@ function patchSaved(ep, response) {
  */
 function answerFromFiles(ep, body) {
   const comp = companion.answer(ep, body); if (comp) return { status: comp.status, json: comp.json, how: comp.how };
+  if (ep.startsWith('userCompanionTaskApi/')) {                     // Accompany offline: only the local timer, never a saved copy
+    const f = fallbackStub(ep); return f ? { ...f, how: 'local companion timer' } : null;
+  }
   const fav = favorites.answer(ep, body); if (fav) return { ...fav, how: 'local favorites' };
   const w = writeStub(ep); if (w) return { ...w, how: 'local stub' };
   if (ep === DIARY) { const j = diaryReplay(body); if (j) return { status: 200, json: j, how: 'diary (saved + local)' }; }
@@ -571,7 +575,9 @@ async function maybeCrawl() {
 /* ================================================================ gateway */
 const account = new Account(ACCOUNT_FILE, log);
 const levels = new LevelLog(LEVELS_FILE, log);                          // how much affinity each level needs, as the server reports it
-const companion = new Companion(COMPANION_FILE, log);
+const LEVELS_TABLE = path.join(HERE, 'levels-table.json');
+const levelNeed = levelNeeder(LEVELS_TABLE, () => levels.map);   // recorded values first, then the table
+const companion = new Companion(COMPANION_FILE, log, { levelNeed });
 /** the server's favorites saved in capture/ (every saved page, each favorite once) */
 const savedFavorites = () => {
   const seen = new Map();
@@ -833,6 +839,7 @@ async function run() {
   seedAccountFromCapture();
   log(`history: ${HISTORY_FILE || '(memory only)'} — ${store.records.length} saved messages`);
   log(`levels: ${levels.count} level threshold(s) recorded in ${path.basename(LEVELS_FILE)}`);
+  log(`levels: table ${fs.existsSync(LEVELS_TABLE) ? 'loaded' : 'MISSING (levels-table.json)'} — used when the server does not answer`);
   log(`persona: ${fs.existsSync(PERSONA_FILE) ? PERSONA_FILE : '(built-in default — create persona.txt to customize)'}`);
   log(`account: ${ACCOUNT_FILE ? (account.exists ? ACCOUNT_FILE : '(no account.json yet — it is created from the server or at first local login)') : '(memory only)'}`
     + ` — profile ${account.hasProfile ? 'saved' : 'none'}, session ${account.state.session.loggedIn ? 'logged in' : 'logged out'}, mode ${LOGIN_MODE} (from ${MODE_SOURCE})`);

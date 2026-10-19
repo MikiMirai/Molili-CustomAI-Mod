@@ -33,3 +33,36 @@ export class LevelLog {
     return true;
   }
 }
+
+/**
+ * Where the affinity-to-next-level number comes from when the server is not answering.
+ * Order: a value recorded from the server (levels.json) > levels-table.json (screenshots, Steam guide, estimates).
+ * Returns (level) => { nextLevelFavor, source } or null.
+ */
+export function levelNeeder(tableFile, recorded = () => ({})) {
+  let table = {};
+  try { table = JSON.parse(fs.readFileSync(tableFile, 'utf8')).levels || {}; } catch { /* no table: recorded values only */ }
+  return level => {
+    const r = recorded()[level];
+    if (r && Number.isFinite(Number(r.nextLevelFavor))) return { nextLevelFavor: Number(r.nextLevelFavor), source: 'recorded' };
+    const t = table[level];
+    return t && Number.isFinite(Number(t.nextLevelFavor)) ? { nextLevelFavor: Number(t.nextLevelFavor), source: t.source || 'table' } : null;
+  };
+}
+
+/**
+ * Carry affinity over level-ups.
+ * level / favor: the saved level and its progress; need: the saved nextLevelFavor for that level;
+ * needOf(level) -> { nextLevelFavor } | null. Returns { level, levelFavor, nextLevelFavor, levelUps }.
+ * If the table ends, progress stops one point short of the last known level.
+ */
+export function advanceLevel(level, favor, need, needOf) {
+  let lv = level, f = favor, n = need, ups = 0;
+  while (Number.isFinite(n) && n > 0 && f >= n) {
+    const nx = needOf(lv + 1);
+    if (!nx) return { level: lv, levelFavor: Math.max(0, n - 1), nextLevelFavor: n, levelUps: ups };
+    f -= n; lv += 1; ups += 1;
+    n = nx.nextLevelFavor;
+  }
+  return { level: lv, levelFavor: Math.max(0, f), nextLevelFavor: n, levelUps: ups };
+}

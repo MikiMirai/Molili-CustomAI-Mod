@@ -18,6 +18,7 @@
  * The end time is a clock time, so a task keeps counting down while the mod is closed.
  */
 import fs from 'node:fs';
+import { advanceLevel } from './levels.mjs';
 
 const STATUSES = new Set(['REST', 'WORK', 'STUDY']);
 const MAX_SECONDS = 24 * 3600;
@@ -28,8 +29,9 @@ const bad = (errMessage) => ({ status: 400, json: { success: false, code: 400, e
 const dayKey = now => { const d = new Date(now - DAY_START_HOUR * 3600e3); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 export class Companion {
-  constructor(file, log = console.log) {
-    this.file = file; this.log = log;
+  /** levelNeed(level) -> { nextLevelFavor } | null, from levels.mjs (recorded values, then the table) */
+  constructor(file, log = console.log, { levelNeed = null } = {}) {
+    this.file = file; this.log = log; this.levelNeed = levelNeed;
     const j = this.#load() ?? {};
     this.s = j.s ?? null;                                           // the current task
     this.d = { day: null, WORK: 0, STUDY: 0, ...(j.d ?? {}) };      // what was earned today
@@ -74,16 +76,33 @@ export class Companion {
   }
 
   /** the saved overview / affection answers with the affinity the Study tasks earned added.
-   *  Offline we only know the threshold of the current level, so progress stops one point short of the next level. */
+   *  With the level table, a level-up made offline moves the level and resets the progress (as the game does).
+   *  Without it, progress stops one point short of the next level. */
   patchFavor(resp, affection) {
     if (!resp?.data || typeof resp.data.levelFavor !== 'number') return resp;
     this.#settle();
     const out = structuredClone(resp), d = out.data;
-    const next = Number(d.nextLevelFavor);
-    let v = d.levelFavor + this.wallet.affinity;
-    if (Number.isFinite(next)) v = Math.min(v, next - 1);
-    d.levelFavor = Math.max(d.levelFavor, v);
+    const gained = this.wallet.affinity;
+    if (this.levelNeed && Number.isFinite(Number(d.level)) && Number.isFinite(Number(d.nextLevelFavor))) {
+      const adv = advanceLevel(Number(d.level), d.levelFavor + gained, Number(d.nextLevelFavor), this.levelNeed);
+      d.level = adv.level; d.levelFavor = adv.levelFavor; d.nextLevelFavor = adv.nextLevelFavor;
+    } else {
+      const next = Number(d.nextLevelFavor);
+      let v = d.levelFavor + gained;
+      if (Number.isFinite(next)) v = Math.min(v, next - 1);
+      d.levelFavor = Math.max(d.levelFavor, v);
+    }
     if (affection) for (const o of d.obtainSourceList ?? []) if (o.code === 'companion_task_study' && o.variables) o.variables.companion_obtain_point = this.d.STUDY;
+    return out;
+  }
+
+  /** the server's getUserAsset answer with the stardust that offline tasks earned added.
+   *  Used while the server answers: that stardust was never sent to the server, so it is not counted twice. */
+  combineAsset(resp) {
+    const st = resp?.data?.stardust;
+    if (!st || typeof st.balance !== 'number' || !this.wallet.stardust) return null;
+    const out = structuredClone(resp);
+    out.data.stardust.balance += this.wallet.stardust;
     return out;
   }
 

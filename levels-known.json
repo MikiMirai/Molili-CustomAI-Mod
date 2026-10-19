@@ -11,7 +11,7 @@
     },
     "8": {
       "nextLevelFavor": 74,
-      "source": "user screenshot"
+      "source": "user screenshot / game log"
     },
     "16": {
       "nextLevelFavor": 135,
@@ -348,6 +348,18 @@
     "99": {
       "nextLevelFavor": 1414,
       "source": "Steam guide (unverified)"
+    },
+    "9": {
+      "nextLevelFavor": 80,
+      "source": "game, Affection page (confirmed by user)"
+    },
+    "10": {
+      "nextLevelFavor": 89,
+      "source": "game, Affection page (confirmed by user)"
+    },
+    "11": {
+      "nextLevelFavor": 97,
+      "source": "game, Affection page (confirmed by user)"
     }
   }
 }
