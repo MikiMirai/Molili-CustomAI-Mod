@@ -22,16 +22,24 @@ export function dayRange(date) {
   return [new Date(y, m - 1, d).getTime(), new Date(y, m - 1, d + 1).getTime()];
 }
 const isoNoMs = ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+/** "2026-09-18T04:22:19+03:00": the computer's own offset, as the server's full diary records write times */
+export function isoLocal(ms) {
+  const d = new Date(ms), off = -d.getTimezoneOffset(), a = Math.abs(off);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    + `${off >= 0 ? '+' : '-'}${pad(Math.floor(a / 60))}:${pad(a % 60)}`;
+}
+/** local ids start here, far above the server's, so the two never clash */
+const LOCAL_ID = 900000000;
 
 export class LocalDiary {
   constructor(file, log = console.log) {
-    this.file = file; this.log = log; this.entries = [];
+    this.file = file; this.log = log; this.entries = []; this.owner = { user_id: '', agent_id: '1' };
     if (!file || !fs.existsSync(file)) return;   // no file = start fresh; a leftover .bak is NOT restored (deleting the file means "start over")
     for (const f of [file, file + '.bak']) {
       if (!fs.existsSync(f)) continue;
       try {
         const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-        this.entries = (Array.isArray(j.entries) ? j.entries : []).filter(e => e && typeof e.content === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.date));
+        this.entries = (Array.isArray(j.entries) ? j.entries : []).filter(e => e && typeof e.content === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(e.date)).map((e, i) => upgrade(e, i));
         if (f !== file) log(`diary: ${path.basename(file)} was unreadable — restored from ${path.basename(f)}`);
         return;
       } catch (e) {
@@ -40,6 +48,9 @@ export class LocalDiary {
     }
   }
   get count() { return this.entries.length; }
+  /** who the entries belong to (set once the account is known); empty is fine */
+  setOwner({ userId, agentId } = {}) { this.owner = { user_id: userId ? String(userId) : '', agent_id: agentId ? String(agentId) : '1' }; }
+  #nextId() { return this.entries.reduce((m, e) => Math.max(m, e.id ?? 0), LOCAL_ID - 1) + 1; }
   has(date) { return this.entries.some(e => e.date === date); }
   /** the newest day that has an entry, or null */
   get latest() { return this.entries.length ? this.entries[this.entries.length - 1].date : null; }
@@ -47,7 +58,7 @@ export class LocalDiary {
   add(date, content) {
     const [y, m, d] = date.split('-').map(Number);
     const created = date === localDate() ? Date.now() : new Date(y, m - 1, d, 21, 0, 0).getTime();
-    const e = { date, createTime: isoNoMs(created), content, favorIncrease: 0, itemList: [] };
+    const e = { id: this.#nextId(), type: 1, date, createTime: isoNoMs(created), created_at: isoLocal(created), updated_at: isoLocal(created), content, favorIncrease: 0, itemList: [] };
     this.entries = this.entries.filter(x => x.date !== date).concat(e).sort((a, b) => a.date.localeCompare(b.date));
     this.#save();
     return e;
@@ -62,7 +73,21 @@ export class LocalDiary {
     } catch (e) { this.log('diary: could not save:', e.message); }
   }
   /** the entries as the server's diary records (what the game's diary page reads) */
-  records() { return this.entries.map(({ createTime, content, favorIncrease, itemList }) => ({ createTime, content, favorIncrease: favorIncrease ?? 0, itemList: itemList ?? [] })); }
+  records() {
+    return this.entries.map(e => ({
+      id: e.id, user_id: this.owner.user_id, agent_id: this.owner.agent_id, type: e.type ?? 1, date: e.date,
+      content: e.content, createTime: e.createTime, created_at: e.created_at ?? e.createTime, updated_at: e.updated_at ?? e.createTime,
+      favorIncrease: e.favorIncrease ?? 0, itemList: e.itemList ?? [],
+    }));
+  }
+}
+
+/** entries written by older versions get the full record fields (id, type, created_at, updated_at) */
+function upgrade(e, i) {
+  const createTime = e.createTime || isoNoMs(Date.parse(e.created_at || '') || Date.now());
+  const ms = Date.parse(createTime);
+  return { id: e.id ?? LOCAL_ID + 1 + i, type: e.type ?? 1, date: e.date, createTime, created_at: e.created_at || isoLocal(ms), updated_at: e.updated_at || e.created_at || isoLocal(ms),
+    content: e.content, favorIncrease: e.favorIncrease ?? 0, itemList: e.itemList ?? [] };
 }
 
 /** "You: ... / Me: ..." for the chat of one day (history records have role, content, ts) */
@@ -70,7 +95,7 @@ export function chatDigest(records, date, { maxChars = 5000, maxMsg = 280 } = {}
   const [a, b] = dayRange(date);
   const lines = [];
   for (const r of records) {
-    if ((r.role !== 'user' && r.role !== 'assistant') || !(r.ts >= a && r.ts < b)) continue;
+    if ((r.role !== 'user' && r.role !== 'assistant') || r.dialogType === 'link' || !(r.ts >= a && r.ts < b)) continue;   // event cards are not talk
     const who = r.role === 'user' ? 'You' : 'Me', text = String(r.content ?? '').replace(/\s+/g, ' ').trim();
     if (!text) continue;
     const last = lines[lines.length - 1];

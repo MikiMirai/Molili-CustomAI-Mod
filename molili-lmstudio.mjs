@@ -40,6 +40,7 @@ import { Companion } from './companion.mjs';
 import { LevelLog, levelNeeder } from './levels.mjs';
 import { followUpEnabled, buildSuggestMessages, parseSuggestions } from './suggest.mjs';
 import { Favorites } from './favorites.mjs';
+import { frequencyOf, hoursFor, activeDue, burstInstruction, parseBurst } from './active.mjs';
 import { loadConfig, CONFIG_FILE } from './config.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -164,6 +165,7 @@ class Store {
     const msgs = [];
     for (const r of this.forAgent(agentId)) {
       if (r.role !== 'user' && r.role !== 'assistant') continue;
+      if (r.dialogType === 'link') continue;   // event cards (task done, level up, diary written) are not talk
       const last = msgs[msgs.length - 1];
       if (last && last.role === r.role) last.content += (r.role === 'assistant' ? ' ' : '\n') + r.content;
       else msgs.push({ role: r.role, content: r.content });
@@ -176,6 +178,19 @@ class Store {
   }
 }
 const store = new Store(HISTORY_FILE);
+/** a chat event card, as the game shows them (a link line with a "View" button); they are not sent to the model */
+const note = (text, metadata = {}) => store.add({ role: 'assistant', source: 'notifyInDialog', dialogType: 'link', content: text, metadata, chatId: `event-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+const eventName = () => capture.newest('agentApi/v1/overview')?.response?.data?.name || 'Kotonoha';
+/** what the Accompany timer and the levels report: built into the same cards the server sends */
+function companionCard(e) {
+  const ST = { STUDY: ['Study', 'COMPANION_TASK_STUDY_END', 'favorIncrease', 'favor increased by '], WORK: ['Work', 'COMPANION_TASK_WORK_END', 'stardustIncrease', 'earned '], REST: ['Rest', 'COMPANION_TASK_REST_END', 'energyIncrease', 'charged '] };
+  if (e.type === 'level') return note(`${eventName()}'s favor level increased to lv.${e.level}`, { code: 'FAVOR_LEVEL_INCREASE', level: e.level, route: 'affection_LevelAdd', linkText: 'Claim Reward' });
+  const [label, code, key, verb] = ST[e.status] || [];
+  if (!label) return null;
+  const unit = e.status === 'WORK' ? ' stardust' : e.status === 'REST' ? ' energy' : '';
+  if (!e.earned) return note(`${label} completed`, { code: `${code}_NO_VALUE` });
+  return note(`${label} completed, ${verb}${e.earned}${e.status === 'STUDY' ? '' : unit}`, { code, route: 'overview', linkText: 'View', [key]: e.earned });
+}
 
 /* ====================================================== streaming text tools */
 /** removes <think>...</think> from a token stream */
@@ -338,6 +353,44 @@ async function chatTurn(body, emit, signal) {
 // The game asks for follow-up lines after a reply. They come from LM Studio, and only when the game's
 // smart-reply switch (enableFollowUp) is on. The last answer is kept, since the game asks again for the same reply.
 const suggestCache = new Map();   // agentId -> { key, list }
+/** one burst of the character's own messages, written by LM Studio in her voice */
+async function activeTick() {
+  if (!ACTIVE_ON || activeBusy || Date.now() < activeRetryAt) return;
+  // the server writes these itself while it answers (LOGIN_MODE auto); offline or while it is down, the mod does
+  if (!(LOGIN_MODE === 'local' || (LOGIN_MODE === 'auto' && Date.now() < cloudDownUntil))) return;
+  const lastUser = [...store.records].reverse().find(r => r.role === 'user');
+  if (!lastUser) return;
+  const freq = frequencyOf(account.state.settings?.configs);
+  const hours = hoursFor(freq, activeCfg);
+  if (!activeDue({ now: Date.now(), lastUserTs: lastUser.ts, sentFor: activeState.sentFor, hours })) return;
+  activeBusy = true;
+  try {
+    const hour = new Date().getHours();
+    const timeOfDay = hour < 5 ? 'late at night' : hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : hour < 21 ? 'evening' : 'night';
+    const u = account.state.userInfo || {};
+    const count = 1 + Math.floor(Math.random() * ACTIVE_MAX);
+    const messages = [{ role: 'system', content: loadPersona() },
+      ...store.context('1').slice(-MAX_TURNS),
+      { role: 'user', content: burstInstruction({ hours, count, you: u.username || u.nickname || 'them', timeOfDay }) }];
+    const think = new ThinkFilter(); let raw = '';
+    const ac = new AbortController(); const timer = setTimeout(() => ac.abort(), 60_000);
+    try {
+      for await (const tok of lmTokens(messages, ac.signal)) { const t = think.push(tok); if (t) raw += t; }
+      const t = think.end(); if (t) raw += t;
+    } finally { clearTimeout(timer); }
+    const lines = parseBurst(raw, count);
+    if (!lines.length) { activeRetryAt = Date.now() + 10 * 60_000; return; }
+    const chatId = `auto-${Date.now()}`;
+    for (const line of lines) store.add({ role: 'assistant', source: 'autoTask', chatId, content: line, dialogType: 'text' });
+    activeState.sentFor = lastUser.ts;
+    try { fs.writeFileSync(ACTIVE_FILE, JSON.stringify(activeState, null, 2) + '\n'); } catch { /* not saved: may repeat once */ }
+    log(`active message: ${lines.length} message(s) after ${Math.round(hours)} h without a reply (level ${freq})`);
+  } catch (e) {
+    activeRetryAt = Date.now() + 10 * 60_000;
+    log('active message skipped:', e.message);
+  } finally { activeBusy = false; }
+}
+
 async function suggestReplies(agentId) {
   if (!followUpEnabled(account.state.settings?.configs)) return [];
   const context = store.context(agentId);
@@ -363,6 +416,7 @@ async function suggestReplies(agentId) {
 const wireBase = r => ({
   dialogId: r.dialogId, msgId: r.msgId, chatId: r.chatId, role: r.role, source: r.source,
   parentMsgId: r.parentMsgId, dialogType: r.dialogType || 'text', content: r.content, supportTts: false,
+  ...(r.metadata ? { metadata: r.metadata } : {}),
 });
 // a message is a favorite when a saved favorite holds it (the game shows the star from this flag)
 const wire = r => {
@@ -546,7 +600,8 @@ async function diaryTick() {
     for (const day of missing) {
       log(`diary: writing the entry for ${day} ...`);
       const text = await generateDiary(day);
-      diary.add(day, text);
+      const entry = diary.add(day, text);
+      if (day === localDate()) note(`${eventName()} wrote a diary about you`, { code: 'VIEW_DIARY', route: 'diary', linkText: 'View Diary' });
       log(`diary: wrote the entry for ${day} (${text.length} characters) — it is on the diary page now`);
     }
   } catch (e) {
@@ -576,8 +631,16 @@ async function maybeCrawl() {
 const account = new Account(ACCOUNT_FILE, log);
 const levels = new LevelLog(LEVELS_FILE, log);                          // how much affinity each level needs, as the server reports it
 const LEVELS_TABLE = path.join(HERE, 'levels-table.json');
+/* ----------------------------------------------- active messages (the character writes first) */
+const ACTIVE_ON = ['1', 'true'].includes(String(env('ACTIVE_MESSAGES', '1')).trim().toLowerCase());
+const ACTIVE_MAX = Math.max(1, Math.min(10, Number(env('ACTIVE_MAX_MESSAGES', 3)) || 3));
+const ACTIVE_FILE = path.join(HERE, 'active-state.json');   // which silence already had its burst
+const activeCfg = key => env(key, { ACTIVE_HOURS_NORMAL: 12, ACTIVE_HOURS_HIGHER: 6, ACTIVE_HOURS_HIGH: 3 }[key]);
+let activeState = { sentFor: null };
+try { activeState = { sentFor: null, ...JSON.parse(fs.readFileSync(ACTIVE_FILE, 'utf8')) }; } catch { /* first run */ }
+let activeBusy = false, activeRetryAt = 0;
 const levelNeed = levelNeeder(LEVELS_TABLE, () => levels.map);   // recorded values first, then the table
-const companion = new Companion(COMPANION_FILE, log, { levelNeed });
+const companion = new Companion(COMPANION_FILE, log, { levelNeed, notify: companionCard });
 /** the server's favorites saved in capture/ (every saved page, each favorite once) */
 const savedFavorites = () => {
   const seen = new Map();
@@ -838,6 +901,7 @@ async function run() {
   if (imported) log(`capture: converted ${imported} saved answer(s) so they can be replayed offline`);
   seedAccountFromCapture();
   log(`history: ${HISTORY_FILE || '(memory only)'} — ${store.records.length} saved messages`);
+  diary.setOwner({ userId: account.state.userInfo?.userId, agentId: '1' });
   log(`levels: ${levels.count} level threshold(s) recorded in ${path.basename(LEVELS_FILE)}`);
   log(`levels: table ${fs.existsSync(LEVELS_TABLE) ? 'loaded' : 'MISSING (levels-table.json)'} — used when the server does not answer`);
   log(`persona: ${fs.existsSync(PERSONA_FILE) ? PERSONA_FILE : '(built-in default — create persona.txt to customize)'}`);
@@ -886,7 +950,8 @@ async function run() {
   for (const t of targetInfos.filter(t => t.type === 'page')) cdp.send('Target.attachToTarget', { targetId: t.targetId, flatten: true }).catch(() => {});
   log(`ready. Chat -> ${LM_URL}  (${STREAM ? 'streaming' : 'non-streaming'})`);
   setTimeout(() => diaryTick().catch(e => log('diary error:', e.message)), Number(env('DIARY_DELAY_MS', 15000)));
-  setInterval(() => diaryTick().catch(e => log('diary error:', e.message)), 5 * 60_000);   // also catches the day changing while the game stays open
+  setInterval(() => diaryTick().catch(e => log('diary error:', e.message)), 5 * 60_000);
+  setInterval(() => activeTick().catch(e => log('active message error:', e.message)), 60_000);   // also catches the day changing while the game stays open
   await cdp.closed;
   log('Molili closed — exiting.');
   process.exit(0);

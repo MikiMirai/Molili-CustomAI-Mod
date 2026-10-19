@@ -22,7 +22,7 @@ import { advanceLevel } from './levels.mjs';
 
 const STATUSES = new Set(['REST', 'WORK', 'STUDY']);
 const MAX_SECONDS = 24 * 3600;
-const RATES = { WORK: { perHour: 60, max: 120 }, STUDY: { perHour: 10, max: 20 } };
+const RATES = { REST: { perHour: 60, max: 120 }, WORK: { perHour: 60, max: 120 }, STUDY: { perHour: 10, max: 20 } };
 const DAY_START_HOUR = 4;
 const env = data => ({ success: true, code: 0, errCode: null, errMessage: null, ...(data === undefined ? {} : { data }) });
 const bad = (errMessage) => ({ status: 400, json: { success: false, code: 400, errCode: 'BAD_REQUEST', errMessage, data: null } });
@@ -30,11 +30,12 @@ const dayKey = now => { const d = new Date(now - DAY_START_HOUR * 3600e3); retur
 
 export class Companion {
   /** levelNeed(level) -> { nextLevelFavor } | null, from levels.mjs (recorded values, then the table) */
-  constructor(file, log = console.log, { levelNeed = null } = {}) {
-    this.file = file; this.log = log; this.levelNeed = levelNeed;
+  constructor(file, log = console.log, { levelNeed = null, notify = null } = {}) {
+    this.file = file; this.log = log; this.levelNeed = levelNeed; this.notify = notify;   // notify({type, ...}) = a chat event card
     const j = this.#load() ?? {};
     this.s = j.s ?? null;                                           // the current task
-    this.d = { day: null, WORK: 0, STUDY: 0, ...(j.d ?? {}) };      // what was earned today
+    this.d = { day: null, REST: 0, WORK: 0, STUDY: 0, ...(j.d ?? {}) };   // what was earned today
+    this.announced = j.announced ?? null;                            // the highest level already shown in chat
     this.wallet = { stardust: 0, affinity: 0, ...(j.wallet ?? {}) }; // what offline tasks earned in total, on top of the saved numbers
   }
 
@@ -45,7 +46,7 @@ export class Companion {
   }
   #save() {
     if (!this.file) return;
-    try { const tmp = this.file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify({ s: this.s, d: this.d, wallet: this.wallet }, null, 2) + '\n'); fs.renameSync(tmp, this.file); }
+    try { const tmp = this.file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify({ s: this.s, d: this.d, wallet: this.wallet, announced: this.announced }, null, 2) + '\n'); fs.renameSync(tmp, this.file); }
     catch (e) { this.log('companion: could not save:', e.message); }
   }
   #remaining(now = Date.now()) { return Math.max(0, Math.ceil(((this.s.endsAt ?? now) - now) / 1000)); }
@@ -53,7 +54,7 @@ export class Companion {
   /** credit the rewards earned by the running task so far (called before anything changes the timer) */
   #settle(now = Date.now()) {
     const key = dayKey(now);
-    if (this.d.day !== key) this.d = { day: key, WORK: 0, STUDY: 0 };
+    if (this.d.day !== key) this.d = { day: key, REST: 0, WORK: 0, STUDY: 0 };
     const t = this.s, rate = t && t.taskStatus === 'ING' ? RATES[t.companionStatus] : null;
     if (!rate) return;
     const accum = Math.max(0, (t.planned || 0) - this.#remaining(now));
@@ -62,17 +63,33 @@ export class Companion {
     const give = Math.min(due, rate.max - this.d[t.companionStatus]);            // never above the daily cap
     if (give > 0) {
       this.d[t.companionStatus] += give;
+      t.earned = (t.earned || 0) + give;
       if (t.companionStatus === 'WORK') this.wallet.stardust += give;
-      else this.wallet.affinity += give;
+      else if (t.companionStatus === 'STUDY') this.wallet.affinity += give;
       this.log(`companion: +${give} ${t.companionStatus === 'WORK' ? 'stardust' : 'affinity'} (today ${this.d[t.companionStatus]}/${rate.max})`);
     }
     t.credited = target;
     // at zero the game stops showing the task, so the task is finished here
     if (this.#remaining(now) === 0) {
       this.log(`companion: ${t.companionStatus} finished`);
+      this.#card(t.companionStatus, t.earned || 0);
       this.s = { agentId: t.agentId, timerType: t.timerType || 1, companionStatus: null, planned: 0, endsAt: null, taskStatus: 'END' };
       this.#save();
     }
+  }
+
+  /** a chat card for a finished task: "Study completed, favor increased by N" (N = 0: no value) */
+  #card(status, earned) {
+    this.notify?.({ type: 'task', status, earned });
+  }
+
+  /** shows a level-up card for every level above the highest one already shown (the first answer only sets the start) */
+  #announce(level) {
+    if (!Number.isFinite(level)) return;
+    if (this.announced == null) { this.announced = level; this.#save(); return; }
+    if (level <= this.announced) return;
+    for (let lv = this.announced + 1; lv <= level; lv++) this.notify?.({ type: 'level', level: lv });
+    this.announced = level; this.#save();
   }
 
   /** the saved overview / affection answers with the affinity the Study tasks earned added.
@@ -86,6 +103,7 @@ export class Companion {
     if (this.levelNeed && Number.isFinite(Number(d.level)) && Number.isFinite(Number(d.nextLevelFavor))) {
       const adv = advanceLevel(Number(d.level), d.levelFavor + gained, Number(d.nextLevelFavor), this.levelNeed);
       d.level = adv.level; d.levelFavor = adv.levelFavor; d.nextLevelFavor = adv.nextLevelFavor;
+      this.#announce(adv.level);
     } else {
       const next = Number(d.nextLevelFavor);
       let v = d.levelFavor + gained;
@@ -143,7 +161,8 @@ export class Companion {
       }
       case 'userCompanionTaskApi/v1/end': {
         this.#settle();
-        const was = this.s?.companionStatus;
+        const was = this.s?.companionStatus, earned = this.s?.earned || 0;
+        if (was) this.#card(was, earned);
         this.s = { agentId, timerType: this.s?.timerType || 1, companionStatus: null, planned: 0, endsAt: null, taskStatus: 'END' };
         this.#save();
         if (was) this.log(`companion: ${was} ended`);
