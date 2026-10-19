@@ -356,8 +356,6 @@ const suggestCache = new Map();   // agentId -> { key, list }
 /** one burst of the character's own messages, written by LM Studio in her voice */
 async function activeTick() {
   if (!ACTIVE_ON || activeBusy || Date.now() < activeRetryAt) return;
-  // the server writes these itself while it answers (LOGIN_MODE auto); offline or while it is down, the mod does
-  if (!(LOGIN_MODE === 'local' || (LOGIN_MODE === 'auto' && Date.now() < cloudDownUntil))) return;
   const lastUser = [...store.records].reverse().find(r => r.role === 'user');
   if (!lastUser) return;
   const freq = frequencyOf(account.state.settings?.configs);
