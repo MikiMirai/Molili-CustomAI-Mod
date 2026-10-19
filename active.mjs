@@ -40,7 +40,8 @@ export function parseBurst(raw, max) {
   const text = String(raw || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^\s*<think>[\s\S]*$/i, '');
   const seen = new Set(), out = [];
   for (let line of text.split('\n')) {
-    line = line.replace(/^\s*(?:quote\s*>\s*|>\s*)+/i, '')          // "quote>" and markdown quote marks
+    line = line.replace(/\[(?:EX_[A-Z_]+|DEFAULT)\]\s*/gi, '')        // mood tags: the chat reads them as expressions, not text
+      .replace(/^\s*(?:quote\s*>\s*|>\s*)+/i, '')          // "quote>" and markdown quote marks
       .replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '')                       // bullets and numbering
       .replace(/^\s*(?:Kotonoha|Molili|Character|Assistant)\s*:\s*/i, '')
       .replace(/^["“「]\s*|\s*["”」]$/g, '')
